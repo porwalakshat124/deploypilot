@@ -24,15 +24,23 @@ export class DockerAdapter {
     const dockerfile = sourcePath(context, profile.dockerfilePath ?? "Dockerfile");
     if (!statSync(dockerfile).isFile() || !statSync(workspace).isDirectory()) throw new Error("Invalid Dockerfile or build context");
     const builder = image + "-builder";
+    let abortCleanup: Promise<unknown> | undefined;
+    const stopBuilder = () => {
+      // Killing the client alone can leave BuildKit executing on the daemon.
+      abortCleanup ??= this.run("docker", ["rm", "--force", "buildx_buildkit_" + builder + "0"], 10000).catch(() => undefined);
+    };
     const args = ["buildx", "build", "--builder", builder, "--load", "--progress=plain", "--network", policy.networkMode === "none" ? "none" : "default", "--file", dockerfile, "--tag", image];
     for (const [key, value] of Object.entries(profile.buildArgs ?? {})) {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || /secret|token|password|key/i.test(key) || typeof value !== "string" || value.includes("\0")) throw new Error("Unsafe build argument");
       args.push("--build-arg", key + "=" + value);
     }
+    options.signal?.addEventListener("abort", stopBuilder, { once: true });
     try {
       await this.run("docker", ["buildx", "create", "--name", builder, "--driver", "docker-container", "--driver-opt", "memory=" + policy.memoryLimitMb + "m", "--driver-opt", "memory-swap=" + policy.memoryLimitMb + "m", "--driver-opt", "cpu-period=100000", "--driver-opt", "cpu-quota=" + Math.round(policy.cpuLimit * 100000)], 30000, options);
       return await this.run("docker", [...args, workspace], Math.min(profile.timeoutSeconds, policy.timeoutSeconds) * 1000, options);
     } finally {
+      options.signal?.removeEventListener("abort", stopBuilder);
+      await abortCleanup;
       // Removing this job's builder also stops daemon-side work after a cancelled CLI.
       await this.run("docker", ["buildx", "rm", "--force", builder], 30000).catch(() => undefined);
     }
