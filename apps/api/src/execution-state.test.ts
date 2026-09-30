@@ -3,14 +3,25 @@ const tx = vi.hoisted(() => ({
   $queryRaw: vi.fn().mockResolvedValue([]),
   deployment: { findFirst: vi.fn(), update: vi.fn().mockResolvedValue({}) },
   deploymentStage: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
-  deploymentLog: { findFirst: vi.fn().mockResolvedValue({ sequence: 4 }), create: vi.fn().mockResolvedValue({ createdAt: new Date() }) },
-  deploymentEvent: { create: vi.fn().mockResolvedValue({}) },
+  deploymentLog: { findFirst: vi.fn().mockResolvedValue({ sequence: 4 }), create: vi.fn().mockResolvedValue({ createdAt: new Date() }), createMany: vi.fn().mockResolvedValue({ count: 2 }) },
+  deploymentEvent: { create: vi.fn().mockResolvedValue({}), createMany: vi.fn().mockResolvedValue({ count: 2 }) },
   deploymentEffect: { createMany: vi.fn().mockResolvedValue({ count: 3 }) }
 }));
 vi.mock("@deploypilot/database/client", () => ({ db: { $transaction: (callback: (client: typeof tx) => Promise<unknown>) => callback(tx) } }));
-import { finishDeployment, appendLog } from "./execution-state.js";
+import { finishDeployment, appendLog, appendLogs } from "./execution-state.js";
 beforeEach(() => { vi.clearAllMocks(); tx.deployment.findFirst.mockResolvedValue({ status: "RUNNING", stages: ["docker-build", "health-check", "deploy"].map(name => ({ name, status: "SUCCEEDED" })) }); });
 describe("worker terminal state", () => {
+  it("redacts batches and allocates matching contiguous log and event evidence", async () => {
+    await appendLogs("d", [{ stage: "docker-build", level: "info", message: "TOKEN=abc" }, { stage: "docker-build", level: "info", message: "second" }]);
+    expect(tx.deploymentLog.createMany.mock.calls[0][0].data.map((entry: { sequence: number; message: string }) => [entry.sequence, entry.message])).toEqual([[5, "TOKEN=[REDACTED]"], [6, "second"]]);
+    expect(tx.deploymentEvent.createMany.mock.calls[0][0].data.map((entry: { payload: { sequence: number } }) => entry.payload.sequence)).toEqual([5, 6]);
+  });
+  it("rejects oversized batches and refuses logs after cancellation", async () => {
+    await expect(appendLogs("d", Array.from({ length: 51 }, () => ({ stage: "build", level: "info", message: "x" })))).rejects.toThrow("between 1 and 50");
+    tx.deployment.findFirst.mockResolvedValue(null);
+    await expect(appendLogs("d", [{ stage: "build", level: "info", message: "x" }])).rejects.toThrow("no longer running");
+    expect(tx.deploymentLog.createMany).not.toHaveBeenCalled();
+  });
   it("refuses success after cancellation", async () => {
     tx.deployment.findFirst.mockResolvedValue({ status: "CANCELLED", stages: [] });
     await expect(finishDeployment("d", "w", "SUCCEEDED", "done")).rejects.toThrow("no longer running");

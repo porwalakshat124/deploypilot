@@ -4,13 +4,22 @@ import type { DockerAdapter } from "./docker-adapter.js";
 import type { WorkerApi } from "./worker-api.js";
 const job = { deploymentId: "f4c843df-fb99-4f77-a49a-0945ad0c9f05", commitSha: "a".repeat(40), profile: { strategy: "DOCKERFILE" as const, timeoutSeconds: 60, port: 3000, healthcheckPath: "/", requiredSecretNames: [] } };
 function fixture() {
-  const api = { log: vi.fn().mockResolvedValue({}), stage: vi.fn().mockResolvedValue({}), complete: vi.fn().mockResolvedValue({}), status: vi.fn().mockResolvedValue({ status: "RUNNING" }), downloadSource: vi.fn().mockResolvedValue(Buffer.from("archive")) };
+  const api = { log: vi.fn().mockResolvedValue({}), logs: vi.fn().mockResolvedValue({}), stage: vi.fn().mockResolvedValue({}), complete: vi.fn().mockResolvedValue({}), status: vi.fn().mockResolvedValue({ status: "RUNNING" }), downloadSource: vi.fn().mockResolvedValue(Buffer.from("archive")) };
   const docker = { build: vi.fn().mockResolvedValue({}), start: vi.fn().mockResolvedValue({}), health: vi.fn().mockResolvedValue("http://127.0.0.1:1234"), logs: vi.fn().mockResolvedValue({}), cleanup: vi.fn().mockResolvedValue(undefined) };
   const source = vi.fn(async (_: Buffer, run: (path: string) => Promise<void>) => run("checkout"));
   const executor = new DeploymentExecutor(docker as unknown as DockerAdapter, source);
   return { api, docker, source, run: () => executor.execute(job, api as unknown as WorkerApi) };
 }
 describe("remote execution", () => {
+  it("delivers verbose Docker output in bounded ordered batches before completion", async () => {
+    const f = fixture();
+    f.docker.build.mockImplementation(async (_i, _w, _p, _policy, options) => { for (let i = 0; i < 125; i++) options.onOutput("line " + i); });
+    expect(await f.run()).toEqual({ status: "SUCCEEDED" });
+    const batches = f.api.logs.mock.calls.map(call => call[1]);
+    expect(batches.map(batch => batch.length)).toEqual([50, 50, 25]);
+    expect(batches.flat().map(entry => entry.message)).toEqual(Array.from({ length: 125 }, (_, i) => "line " + i));
+    expect(f.api.logs.mock.invocationCallOrder.at(-1)!).toBeLessThan(f.api.complete.mock.invocationCallOrder[0]);
+  });
   it("completes only after image, container, and HTTP health succeed", async () => {
     const f = fixture(); expect(await f.run()).toEqual({ status: "SUCCEEDED" });
     expect(f.docker.start).toHaveBeenCalledOnce(); expect(f.docker.health).toHaveBeenCalledOnce();

@@ -27,6 +27,7 @@ export class WorkerApi {
   }
   stage(deploymentId: string, stage: string, status: "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED", message?: string) { return this.request(`/v1/workers/${encodeURIComponent(this.workerId)}/deployments/${encodeURIComponent(deploymentId)}/stages/${encodeURIComponent(stage)}`, { method: "POST", body: JSON.stringify({ status, message }) }); }
   log(deploymentId: string, stage: string, level: string, message: string) { return this.request(`/v1/workers/${encodeURIComponent(this.workerId)}/deployments/${encodeURIComponent(deploymentId)}/logs`, { method: "POST", body: JSON.stringify({ stage, level, message }) }); }
+  logs(deploymentId: string, entries: { stage: string; level: string; message: string }[]) { return this.request(`/v1/workers/${encodeURIComponent(this.workerId)}/deployments/${encodeURIComponent(deploymentId)}/logs/batch`, { method: "POST", body: JSON.stringify({ entries }) }); }
   complete(deploymentId: string, status: "SUCCEEDED" | "FAILED" | "TIMED_OUT", message: string) { return this.request(`/v1/workers/${encodeURIComponent(this.workerId)}/deployments/${encodeURIComponent(deploymentId)}/complete`, { method: "POST", body: JSON.stringify({ status, message }) }); }
   private async request<T = unknown>(path: string, init: RequestInit) {
     const response = await fetch(this.url(path), { ...init, signal: AbortSignal.timeout(45000), headers: { ...this.headers(), "Content-Type": "application/json", ...init.headers } });
