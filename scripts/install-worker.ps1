@@ -1,61 +1,60 @@
+param([string]$ConfigPath, [string]$InstallDir = (Join-Path $env:USERPROFILE ".deploypilot-worker"), [string]$Version = "main")
 $ErrorActionPreference = "Stop"
-$RepoUrl = if ($env:DEPLOYPILOT_REPO_URL) { $env:DEPLOYPILOT_REPO_URL } else { "https://github.com/MrInfinityboss/deploypilot.git" }
-$Version = if ($env:DEPLOYPILOT_VERSION) { $env:DEPLOYPILOT_VERSION } else { "v1.0.12" }
-$InstallDir = if ($env:DEPLOYPILOT_WORKER_DIR) { $env:DEPLOYPILOT_WORKER_DIR } else { Join-Path $env:USERPROFILE ".deploypilot-worker" }
+$RepoUrl = if ($env:DEPLOYPILOT_REPO_URL) { $env:DEPLOYPILOT_REPO_URL } else { "https://github.com/porwalakshat124/deploypilot.git" }
+foreach ($command in @("git","node","pnpm","docker")) {
+  if (!(Get-Command $command -ErrorAction SilentlyContinue)) { throw "$command is required" }
+}
+if ((docker info --format "{{.OSType}}") -ne "linux") { throw "Start Docker Desktop with its Linux engine before installing" }
+if (!$ConfigPath) { throw "Provide -ConfigPath pointing to a private .env containing WORKER_API_URL, WORKER_ID and WORKER_TOKEN only." }
+$ConfigPath = (Resolve-Path -LiteralPath $ConfigPath).Path
+$config = Get-Content -LiteralPath $ConfigPath -Raw
+foreach ($key in @("WORKER_API_URL","WORKER_ID","WORKER_TOKEN")) {
+  if ($config -notmatch ("(?m)^" + $key + "=\S+")) { throw "Worker config is missing $key" }
+}
+if ($config -match "(?m)^(DATABASE_URL|DIRECT_URL|REDIS_URL|GITHUB_PRIVATE_KEY|OPENAI_API_KEY)=") { throw "Use a worker-only config; server credentials must stay on the API." }
+$InstallDir = [IO.Path]::GetFullPath($InstallDir)
+if ($InstallDir -eq [IO.Path]::GetPathRoot($InstallDir) -or $InstallDir -eq $env:USERPROFILE) { throw "Unsafe installation directory" }
 $TaskName = "DeployPilot Worker"
-
-foreach ($command in @("git", "node", "pnpm", "docker")) {
-  if (-not (Get-Command $command -ErrorAction SilentlyContinue)) { throw "$command is required. Install it before continuing." }
-}
-
-function Read-ClipboardValue([string]$Label, [switch]$Secret) {
-  Write-Host "Copy $Label to the Windows clipboard, then press Enter here."
-  [void](Read-Host)
-  $value = (Get-Clipboard -Raw).Trim()
-  if ([string]::IsNullOrWhiteSpace($value)) { throw "$Label was not found in the clipboard." }
-  if ($Secret) { Write-Host "$Label received securely from the clipboard." } else { Write-Host "$Label received from the clipboard." }
-  return $value
-}
-
-Write-Host "DeployPilot Worker setup" -ForegroundColor Cyan
-$ApiUrl = Read-ClipboardValue "the DeployPilot API URL"
-$WorkerId = Read-ClipboardValue "the Worker ID"
-$WorkerToken = Read-ClipboardValue "the Worker token" -Secret
-$RedisUrl = Read-ClipboardValue "the shared Redis URL" -Secret
-$DatabaseUrl = Read-ClipboardValue "the Supabase DATABASE_URL" -Secret
-$DatabaseUrl = $DatabaseUrl -replace '^DATABASE_URL\s*=\s*', "";
-$DatabaseUrl = $DatabaseUrl.Trim().Trim('"').Trim("'")
-
-try { $parsedApiUrl = [Uri]$ApiUrl; if (-not $parsedApiUrl.IsAbsoluteUri) { throw "invalid" } } catch { throw "The API URL is not a valid URL." }
-if ([string]::IsNullOrWhiteSpace($WorkerId) -or [string]::IsNullOrWhiteSpace($WorkerToken) -or [string]::IsNullOrWhiteSpace($RedisUrl) -or [string]::IsNullOrWhiteSpace($DatabaseUrl)) { throw "All worker values are required." }
-if (-not ($DatabaseUrl.StartsWith("postgresql://") -or $DatabaseUrl.StartsWith("postgres://"))) { throw "DATABASE_URL must start with postgresql:// or postgres://. Copy the full Supabase connection string, not the variable name or a masked value." }
-
-if (-not (Test-Path (Join-Path $InstallDir ".git"))) {
-  if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force }
-  git clone --depth 1 --branch $Version $RepoUrl $InstallDir
+if (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
+  Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  git -C $InstallDir fetch --depth 1 origin $Version
+  if ($LASTEXITCODE) { throw "Unable to fetch worker release" }
+  git -C $InstallDir checkout --detach FETCH_HEAD
+  if ($LASTEXITCODE) { throw "Worker checkout has local changes; preserve them before upgrading" }
 } else {
-  git -C $InstallDir fetch --tags --depth 1 origin $Version
-  git -C $InstallDir checkout $Version
+  if (Test-Path -LiteralPath $InstallDir) { throw "Existing directory is not a worker checkout. Choose an empty installation path." }
+  git clone --depth 1 --branch $Version $RepoUrl $InstallDir
+  if ($LASTEXITCODE) { throw "Unable to clone worker release" }
 }
-
-@"
-WORKER_API_URL=$ApiUrl
-WORKER_ID=$WorkerId
-WORKER_TOKEN=$WorkerToken
-REDIS_URL=$RedisUrl
-DATABASE_URL=$DatabaseUrl
-WORKER_VERSION=1.0.12
-"@ | Set-Content (Join-Path $InstallDir ".env") -NoNewline
-
+Copy-Item -LiteralPath $ConfigPath -Destination (Join-Path $InstallDir ".env") -Force
+$privateFile = Join-Path $InstallDir ".env"
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $privateFile /inheritance:r /grant:r ($identity + ":(F)") | Out-Null
+if ($LASTEXITCODE) { throw "Unable to restrict worker config permissions" }
 Push-Location $InstallDir
-pnpm install --frozen-lockfile
-$WorkerCommand = "Set-Location '$InstallDir'; pnpm --filter @deploypilot/worker exec tsx src/main.ts"
-$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command `"$WorkerCommand`""
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$Settings = New-ScheduledTaskSettingsSet -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
-Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description "DeployPilot Docker worker" -Force | Out-Null
+try {
+  pnpm install --filter @deploypilot/worker... --frozen-lockfile
+  if ($LASTEXITCODE) { throw "Worker dependency installation failed" }
+  pnpm --filter @deploypilot/worker build
+  if ($LASTEXITCODE) { throw "Worker compilation failed" }
+} finally { Pop-Location }
+$nodePath = (Get-Command node).Source
+$runner = Join-Path $InstallDir "run-worker.ps1"
+$runnerText = @'
+$ErrorActionPreference = "Continue"
+Set-Location -LiteralPath "__DIRECTORY__"
+while ($true) {
+  if ((Test-Path worker.log) -and (Get-Item worker.log).Length -gt 10485760) { Move-Item worker.log worker.previous.log -Force }
+  & "__NODE__" apps/worker/dist/main.js *>> worker.log
+  Start-Sleep -Seconds 10
+}
+'@
+$runnerText.Replace("__DIRECTORY__", $InstallDir.Replace('"','')).Replace("__NODE__", $nodePath.Replace('"','')) | Set-Content -LiteralPath $runner
+$taskArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $runner + '"'
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
+$settings = New-ScheduledTaskSettingsSet -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description "DeployPilot outbound Docker worker" -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
-Pop-Location
-Write-Host "DeployPilot worker installed and started." -ForegroundColor Green
-Write-Host "It will start automatically when this Windows user logs in."
-Write-Host "Check it in Task Scheduler: $TaskName"
+Write-Host "Worker installed. It restarts after failure and starts when this user logs in."

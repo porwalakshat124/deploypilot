@@ -9,5 +9,13 @@
     "test": "pnpm -r test",
     "dev": "pnpm --parallel --filter @deploypilot/api --filter @deploypilot/worker --filter @deploypilot/web dev"
   },
-  "engines": { "node": "22.x" }
+  "engines": {
+    "node": "22.x"
+  },
+  "devDependencies": {
+    "prisma": "6.19.3"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.3"
+  }
 }

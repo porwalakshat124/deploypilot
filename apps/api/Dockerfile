@@ -1,10 +1,13 @@
 FROM node:22-alpine
 WORKDIR /app
-RUN corepack enable
-COPY package.json pnpm-workspace.yaml tsconfig.base.json ./
-COPY apps/api/package.json apps/api/package.json
-RUN pnpm install --filter @deploypilot/api --frozen-lockfile=false
+RUN apk add --no-cache openssl && corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/database packages/database
+COPY packages/shared packages/shared
 COPY apps/api apps/api
-RUN pnpm --filter @deploypilot/api build
+RUN pnpm install --filter @deploypilot/api... --frozen-lockfile
+RUN pnpm --filter @deploypilot/database generate && pnpm --filter @deploypilot/api build
+ENV NODE_ENV=production
 EXPOSE 4000
-CMD ["node", "apps/api/dist/main.js"]
+USER node
+CMD ["node", "apps/api/node_modules/tsx/dist/cli.mjs", "apps/api/src/main.ts"]

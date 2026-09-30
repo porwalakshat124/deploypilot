@@ -31,6 +31,9 @@ export type BuildProfile = {
   healthcheckPath?: string;
   port?: number;
   dockerContext?: string;
+  dockerfilePath?: string;
+  buildArgs?: Record<string, string>;
+  command?: string[];
   timeoutSeconds: number;
   requiredSecretNames: string[];
 };

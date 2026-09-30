@@ -1,208 +1,35 @@
 "use client";
-
 import { useEffect, useState } from "react";
 import { apiRequest } from "../../../lib/api";
-import { formatHeartbeatAge, getWorkerPresence } from "../../../lib/worker-status";
-import { Badge, Card, Empty, PageHeader, formatDate } from "../ui";
-
-type Repo = { id: string; fullName: string; defaultBranch: string };
-type Worker = {
-  id: string;
-  name: string;
-  version: string;
-  capabilities?: Record<string, unknown>;
-  lastSeenAt: string | null;
-  revokedAt: string | null;
-  createdAt?: string;
-  status?: "ONLINE" | "OFFLINE" | "REVOKED";
-};
-
-const REFRESH_INTERVAL_MS = 15_000;
-
+import { RepositoryPicker, useRepository, CopyButton } from "../repository-context";
+import { Card, Empty, PageHeader, Badge, formatDate } from "../ui";
+type Worker = { id: string; name: string; version: string; lastSeenAt: string | null; revokedAt: string | null; capabilities: { maxConcurrency?: number; docker?: boolean } };
 export default function WorkersPage() {
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [repoId, setRepoId] = useState("");
-  const [name, setName] = useState("home-docker");
-  const [workers, setWorkers] = useState<Worker[]>([]);
-  const [workerId, setWorkerId] = useState("");
-  const [token, setToken] = useState("");
-  const [loadingRepos, setLoadingRepos] = useState(true);
-  const [loadingWorkers, setLoadingWorkers] = useState(false);
-  const [msg, setMsg] = useState("Loading connected repositories…");
-
+  const { repoId } = useRepository();
+  const [name, setName] = useState("home-docker"), [workers, setWorkers] = useState<Worker[]>([]);
+  const [credential, setCredential] = useState<{ workerId: string; token: string } | null>(null);
+  const [message, setMessage] = useState(""), [busy, setBusy] = useState(false);
+  async function load() { if (!repoId) return; const result = await apiRequest<{ workers: Worker[] }>("/v1/repositories/" + repoId + "/workers"); setWorkers(result.workers); }
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadRepositories() {
-      try {
-        setLoadingRepos(true);
-        const result = await apiRequest<{ repositories: Repo[] }>("/v1/repositories");
-        if (cancelled) return;
-
-        setRepos(result.repositories);
-        const requestedId = new URLSearchParams(window.location.search).get("repositoryId");
-        const selected = result.repositories.find((repo) => repo.id === requestedId) ?? result.repositories[0];
-        if (selected) {
-          setRepoId(selected.id);
-          setMsg(`Selected ${selected.fullName}.`);
-        } else {
-          setMsg("No connected repositories found. Sync a GitHub repository first.");
-        }
-      } catch (error) {
-        if (!cancelled) setMsg(error instanceof Error ? error.message : "Unable to load repositories.");
-      } finally {
-        if (!cancelled) setLoadingRepos(false);
-      }
-    }
-
-    void loadRepositories();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!repoId) {
-      setWorkers([]);
-      return;
-    }
-
-    let cancelled = false;
-
-    async function refreshWorkers() {
-      try {
-        setLoadingWorkers(true);
-        const result = await apiRequest<{ workers: Worker[] }>(`/v1/repositories/${repoId}/workers`);
-        if (cancelled) return;
-        setWorkers(result.workers);
-        setMsg(`${result.workers.length} worker${result.workers.length === 1 ? "" : "s"} found. Status refreshes automatically.`);
-      } catch (error) {
-        if (!cancelled) setMsg(error instanceof Error ? error.message : "Unable to load workers.");
-      } finally {
-        if (!cancelled) setLoadingWorkers(false);
-      }
-    }
-
-    void refreshWorkers();
-    const interval = window.setInterval(() => void refreshWorkers(), REFRESH_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
+    let active = true; setWorkers([]); setCredential(null);
+    const refresh = () => { if (repoId) void apiRequest<{ workers: Worker[] }>("/v1/repositories/" + repoId + "/workers").then(data => { if (active) setWorkers(data.workers); }).catch(e => { if (active) setMessage(e.message); }); };
+    refresh(); const timer = setInterval(refresh, 30000);
+    return () => { active = false; clearInterval(timer); };
   }, [repoId]);
-
-  const register = async () => {
-    if (!repoId) {
-      setMsg("Choose a repository before registering a worker.");
-      return;
-    }
-
+  async function action(kind: string, id?: string) {
+    if ((kind === "revoke" || kind === "rotate-token") && !window.confirm(kind === "revoke" ? "Revoke this worker? Running jobs will stop when they next contact the API." : "Rotate the token? Restart this worker with the new token immediately.")) return;
+    setBusy(true);
     try {
-      const result = await apiRequest<{ workerId: string; token: string }>(`/v1/repositories/${repoId}/workers/register`, {
-        method: "POST",
-        body: JSON.stringify({ name, version: "0.1.0", maxConcurrency: 1 }),
-      });
-      setWorkerId(result.workerId);
-      setToken(result.token);
-      setMsg("Worker registered. Copy the token now; it will not be shown again after leaving or refreshing this page.");
-      const refreshed = await apiRequest<{ workers: Worker[] }>(`/v1/repositories/${repoId}/workers`);
-      setWorkers(refreshed.workers);
-    } catch (error) {
-      setMsg(error instanceof Error ? error.message : "Unable to register worker.");
-    }
-  };
-
-  const copy = async (value: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setMsg(`${label} copied to clipboard.`);
-    } catch {
-      setMsg(`Unable to copy ${label.toLowerCase()}.`);
-    }
-  };
-
-  const revoke = async (worker: Worker) => {
-    if (!window.confirm(`Revoke access for “${worker.name}”? This worker will no longer be able to receive jobs.`)) return;
-
-    try {
-      await apiRequest(`/v1/workers/${worker.id}/revoke`, { method: "POST" });
-      setMsg(`${worker.name} access revoked.`);
-      const result = await apiRequest<{ workers: Worker[] }>(`/v1/repositories/${repoId}/workers`);
-      setWorkers(result.workers);
-    } catch (error) {
-      setMsg(error instanceof Error ? error.message : "Unable to revoke worker access.");
-    }
-  };
-
-  const rotateToken = async (worker: Worker) => {
-    if (!window.confirm(`Rotate the token for “${worker.name}”? The current worker token will stop working immediately.`)) return;
-    try {
-      const result = await apiRequest<{ workerId: string; token: string }>(`/v1/workers/${worker.id}/rotate-token`, { method: "POST" });
-      setWorkerId(result.workerId);
-      setToken(result.token);
-      setMsg(`${worker.name} token rotated. Update WORKER_TOKEN on the worker before its next heartbeat.`);
-      const refreshed = await apiRequest<{ workers: Worker[] }>(`/v1/repositories/${repoId}/workers`);
-      setWorkers(refreshed.workers);
-    } catch (error) {
-      setMsg(error instanceof Error ? error.message : "Unable to rotate worker token.");
-    }
-  };
-
-  return (
-    <>
-      <PageHeader eyebrow="Runtime / Docker" title="Workers" description="Workers connect outbound from computers you control and execute bounded Docker jobs locally." />
-      <Card style={{ marginBottom: 18 }}>
-        <div style={{ display: "grid", gap: 14 }}>
-          <label className="dp-label">
-            Repository
-            <select className="dp-select" value={repoId} onChange={(event) => setRepoId(event.target.value)} disabled={loadingRepos || repos.length === 0}>
-              <option value="">{loadingRepos ? "Loading repositories…" : repos.length ? "Select a repository" : "No repositories available"}</option>
-              {repos.map((repo) => <option key={repo.id} value={repo.id}>{repo.fullName}</option>)}
-            </select>
-          </label>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-            <label className="dp-label" style={{ flex: 1, minWidth: 220 }}>
-              Worker name
-              <input className="dp-input" value={name} onChange={(event) => setName(event.target.value)} />
-            </label>
-            <button className="dp-btn dp-btn-primary" onClick={() => void register()} disabled={!repoId}>Register worker</button>
-            <button className="dp-btn" onClick={() => window.location.reload()}>Refresh</button>
-          </div>
-        </div>
-        <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 12 }}>{msg}</div>
-        {token && <div style={{ marginTop: 18, display: "grid", gap: 10 }}>
-          <div>
-            <div className="dp-kicker">Worker ID</div>
-            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              <input className="dp-input dp-mono" readOnly value={workerId} />
-              <button className="dp-btn" onClick={() => void copy(workerId, "Worker ID")}>Copy</button>
-            </div>
-          </div>
-          <div>
-            <div className="dp-kicker">Worker token · one-time display</div>
-            <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              <input className="dp-input dp-mono" readOnly type="password" value={token} />
-              <button className="dp-btn" onClick={() => void copy(token, "Worker token")}>Copy token</button>
-            </div>
-            <div style={{ color: "var(--yellow)", fontSize: 11, marginTop: 7 }}>Store this token in the worker’s local environment as WORKER_TOKEN. It cannot be recovered from the dashboard.</div>
-          </div>
-        </div>}
-      </Card>
-      <div style={{ display: "grid", gap: 11 }}>
-        {loadingWorkers && workers.length === 0 && <Card><div style={{ color: "var(--muted)" }}>Refreshing worker status…</div></Card>}
-        {!loadingWorkers && workers.length === 0 && repoId && <Empty title="No workers registered" text="Register a worker to make deployment targets available." />}
-        {workers.map((worker) => {
-          const presence = worker.status ?? getWorkerPresence(worker.lastSeenAt, worker.revokedAt);
-          return <Card key={worker.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 15, flexWrap: "wrap", padding: 17 }}>
-            <div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}><strong>{worker.name}</strong><Badge status={presence} /></div>
-              <div className="dp-mono" style={{ color: "var(--muted)", fontSize: 11, marginTop: 7 }}>id: {worker.id} · v{worker.version} · last heartbeat {formatHeartbeatAge(worker.lastSeenAt)}</div>
-              <div style={{ color: "var(--muted)", fontSize: 11, marginTop: 5 }}>{worker.lastSeenAt ? `Last seen ${formatDate(worker.lastSeenAt)}` : "This worker has not sent a heartbeat yet."}</div>
-            </div>
-            {!worker.revokedAt && <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><button className="dp-btn" onClick={() => void rotateToken(worker)}>Rotate token</button><button className="dp-btn dp-btn-danger" onClick={() => void revoke(worker)}>Revoke access</button></div>}
-          </Card>;
-        })}
-      </div>
-    </>
-  );
+      const result = await apiRequest<{ workerId: string; token: string }>(id ? "/v1/workers/" + id + "/" + kind : "/v1/repositories/" + repoId + "/workers/register", { method: "POST", body: JSON.stringify({ name, version: "0.2.0", maxConcurrency: 1 }) });
+      if (result.token) setCredential(result); else setCredential(null);
+      await load(); setMessage(kind === "register" ? "Worker registered. Copy its token now." : "Worker updated.");
+    } catch (e) { setMessage(e instanceof Error ? e.message : "Worker action failed"); }
+    finally { setBusy(false); }
+  }
+  const config = credential ? ["WORKER_API_URL=" + process.env.NEXT_PUBLIC_API_URL, "WORKER_ID=" + credential.workerId, "WORKER_TOKEN=" + credential.token].join("\n") : "";
+  return <><PageHeader eyebrow="Runtime / Docker" title="Workers" description="Install the agent on a dedicated Docker host. It only needs outbound access to your API." />
+    <Card><div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "end" }}><RepositoryPicker /><label className="dp-label">Worker name<input className="dp-input" value={name} onChange={e => setName(e.target.value)} /></label><button className="dp-btn dp-btn-primary" disabled={busy || !repoId || !name.trim()} onClick={() => action("register")}>Register worker</button></div><p role="status">{message}</p>
+      {credential && <div><p>One-time credential for <code>{credential.workerId}</code>. Store it in the worker’s private environment file.</p><input className="dp-input" type="password" readOnly value={credential.token} /><CopyButton value={config} label="Copy worker environment" /><CopyButton value={credential.workerId} label="Copy worker ID" /><button className="dp-btn" onClick={() => setCredential(null)}>Hide credential</button></div>}
+    </Card><Card style={{ marginTop: 16 }}><h2>Start the remote agent</h2><p>Windows/macOS: start Docker Desktop with Linux containers. Linux: start Docker Engine. Install Node.js 22 and pnpm 9.15, then copy this project to the machine.</p><pre className="dp-mono">pnpm install --frozen-lockfile{"\n"}pnpm --filter @deploypilot/worker start</pre><p>Set WORKER_API_URL, WORKER_ID and WORKER_TOKEN in the machine environment or private .env. Keep the Docker daemon private. Database, Redis and GitHub keys stay on the API server.</p><CopyButton value={"pnpm --filter @deploypilot/worker start"} label="Copy start command" /></Card>
+    <div style={{ display: "grid", gap: 12, marginTop: 16 }}>{workers.map(worker => <Card key={worker.id}><div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}><strong>{worker.name}</strong><Badge status={worker.revokedAt ? "REVOKED" : worker.lastSeenAt && Date.now() - Date.parse(worker.lastSeenAt) < 90000 ? "ONLINE" : "OFFLINE"} /></div><p>v{worker.version} · concurrency {worker.capabilities.maxConcurrency ?? 1} · Docker {worker.capabilities.docker ? "enabled" : "unavailable"}</p><p>Last heartbeat: {formatDate(worker.lastSeenAt)}</p><CopyButton value={worker.id} label="Copy ID" />{!worker.revokedAt && <><button className="dp-btn" disabled={busy} onClick={() => action("rotate-token", worker.id)}>Rotate token</button><button className="dp-btn dp-btn-danger" disabled={busy} onClick={() => action("revoke", worker.id)}>Revoke</button></>}</Card>)}</div>{!workers.length && <Empty title="No workers available" text="Select a repository and register a Docker worker above." />}</>;
 }

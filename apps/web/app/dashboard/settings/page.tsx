@@ -1,3 +1,20 @@
-import { Card,PageHeader,Badge } from "../ui";
-const integrations=[['Supabase Auth','GitHub login, sessions, and protected API access.','CONFIGURED'],['GitHub App','Repository installation and push webhook access.','CONFIGURED'],['PostgreSQL / Supabase','Durable deployment metadata, stages, and logs.','CONFIGURED'],['Redis / BullMQ','Queue transport for worker execution.','CONFIGURED'],['Cloudflare R2','Artifact and archived-log storage.','NEXT'],['Resend','Deployment email notifications.','NEXT'],['OpenAI','AI deployment diagnosis.','OPTIONAL']];
-export default function SettingsPage(){return <><PageHeader eyebrow="Workspace / Configuration" title="Settings" description="Provider credentials stay on the server and are never displayed in the dashboard."/><Card style={{marginBottom:16}}><div style={{display:'flex',justifyContent:'space-between',gap:20,alignItems:'center',flexWrap:'wrap'}}><div><div className="dp-kicker">Security boundary</div><h2 style={{fontSize:17,margin:'9px 0 6px'}}>You own the infrastructure</h2><p style={{color:'var(--muted)',fontSize:12,margin:0,lineHeight:1.6}}>DeployPilot only uses the credentials configured in your local or hosted environment. Never paste secret values into the dashboard or source control.</p></div><Badge status="PRIVATE BY DEFAULT"/></div></Card><div style={{display:'grid',gap:10}}>{integrations.map(([name,desc,status])=><Card key={name} style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:15,padding:'17px 19px',flexWrap:'wrap'}}><div><strong>{name}</strong><div style={{color:'var(--muted)',fontSize:12,marginTop:5}}>{desc}</div></div><Badge status={status}/></Card>)}</div><Card style={{marginTop:16}}><div className="dp-kicker">Production checklist</div><div style={{display:'grid',gap:11,marginTop:14,color:'var(--muted)',fontSize:12}}>{['Set NEXT_PUBLIC_API_URL to your hosted API origin','Configure GitHub webhook URL after API deployment','Use Supabase pooler/direct URLs according to your hosting runtime','Keep worker tokens and provider keys in a secrets manager'].map((x,i)=><div key={x}><span style={{color:'var(--green)',marginRight:10}}>{i<2?'✓':'○'}</span>{x}</div>)}</div></Card></>}
+"use client";
+import { useEffect, useState } from "react";
+import { apiRequest } from "../../../lib/api";
+import { Card, PageHeader, Badge } from "../ui";
+type Settings = { integrations: { name: string; configured: boolean; description: string }[]; failedDeliveries: number; workerProtocol: string; providerDelivery: string };
+export default function SettingsPage() {
+  const [settings, setSettings] = useState<Settings | null>(null), [error, setError] = useState("");
+  useEffect(() => {
+    const abort = new AbortController();
+    apiRequest<Settings>("/v1/settings", { signal: abort.signal }).then(setSettings).catch(e => { if (!abort.signal.aborted) setError(e.message); });
+    return () => abort.abort();
+  }, []);
+  return <><PageHeader eyebrow="Workspace / Configuration" title="Settings" description="Provider credentials stay on the API server." />
+    <Card><h2>Server configuration</h2><p role="status">{error || (!settings ? "Checking configuration..." : settings.providerDelivery)}</p>
+    {settings && <><p>Worker transport: {settings.workerProtocol}</p><p>Provider deliveries requiring attention: {settings.failedDeliveries}</p></>}
+    </Card>
+    <div style={{ display: "grid", gap: 12, marginTop: 16 }}>{settings?.integrations.map(item => <Card key={item.name}><div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><div><strong>{item.name}</strong><p>{item.description}</p></div><Badge status={item.configured ? "CONFIGURED" : "NOT CONFIGURED"} /></div></Card>)}</div>
+    <Card style={{ marginTop: 16 }}><h2>Worker availability</h2><p>This Windows worker requires Docker Desktop's Linux engine. Keep the PC awake while deployments run. The worker starts at user login and reconnects automatically.</p><p>Public application routing requires an ingress or tunnel configured for the worker host.</p></Card>
+  </>;
+}

@@ -26,8 +26,9 @@ export class NotificationsService {
 
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "Idempotency-Key": `deployment/${deploymentId}/${status}` },
       body: JSON.stringify({ from, to: [deployment.repository.owner.email], subject, text }),
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`Resend request failed with HTTP ${response.status}`);
     return { sent: true };

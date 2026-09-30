@@ -111,6 +111,7 @@ model Deployment {
   logs           DeploymentLog[]
   events         DeploymentEvent[]
   diagnosis     AIDiagnosis?
+  effects       DeploymentEffect[]
   @@index([repositoryId, createdAt])
 }
 
@@ -140,6 +141,7 @@ model DeploymentLog {
 
 model DeploymentEvent {
   id           String @id @default(uuid())
+  sequence     Int @unique @default(autoincrement())
   deploymentId String
   deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
   type         String
@@ -187,4 +189,19 @@ model AIDiagnosis {
   inputHash    String
   response     Json
   createdAt    DateTime @default(now())
+}
+
+model DeploymentEffect {
+  id           String @id @default(uuid())
+  deploymentId String
+  deployment   Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  kind         String
+  status       String @default("PENDING")
+  attempts     Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  lockedAt     DateTime?
+  lastError    String?
+  createdAt    DateTime @default(now())
+  @@unique([deploymentId, kind])
+  @@index([status, nextAttemptAt])
 }
