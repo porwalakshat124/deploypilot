@@ -29,7 +29,7 @@ export class WorkerApi {
   log(deploymentId: string, stage: string, level: string, message: string) { return this.request(`/v1/workers/${encodeURIComponent(this.workerId)}/deployments/${encodeURIComponent(deploymentId)}/logs`, { method: "POST", body: JSON.stringify({ stage, level, message }) }); }
   complete(deploymentId: string, status: "SUCCEEDED" | "FAILED" | "TIMED_OUT", message: string) { return this.request(`/v1/workers/${encodeURIComponent(this.workerId)}/deployments/${encodeURIComponent(deploymentId)}/complete`, { method: "POST", body: JSON.stringify({ status, message }) }); }
   private async request<T = unknown>(path: string, init: RequestInit) {
-    const response = await fetch(this.url(path), { ...init, signal: AbortSignal.timeout(15000), headers: { ...this.headers(), "Content-Type": "application/json", ...init.headers } });
+    const response = await fetch(this.url(path), { ...init, signal: AbortSignal.timeout(45000), headers: { ...this.headers(), "Content-Type": "application/json", ...init.headers } });
     if (!response.ok) throw new Error(`Worker API request failed with HTTP ${response.status}`);
     return response.json() as Promise<T>;
   }

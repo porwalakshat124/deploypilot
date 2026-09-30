@@ -268,7 +268,7 @@ export class AppController {
       const repository = await tx.repository.findFirst({ where: { githubRepoId: String(payload.repository!.id) }, include: { configs: { orderBy: { version: "desc" } }, environments: { orderBy: { name: "asc" } }, workers: { orderBy: { createdAt: "asc" } } } });
       const config = repository?.configs.find(item => item.branchRule === branch || item.branchRule === "*");
       const environment = repository?.environments.find(item => item.name.toLowerCase() === "production");
-      const worker = repository?.workers.find(item => !item.revokedAt);
+    const worker = repository?.workers.find(item => !item.revokedAt && item.lastSeenAt && Date.now() - item.lastSeenAt.getTime() < 90000 && (item.capabilities as { apiPolling?: boolean } | null)?.apiPolling);
       if (!repository || !config || !environment || !worker) {
         await tx.webhookDelivery.update({ where: { deliveryId }, data: { processedAt: new Date(), outcome: "ignored-incomplete-configuration" } });
         return { accepted: true, ignored: true, reason: "Push deployment requires a matching profile, Production environment, and active worker" };
@@ -408,7 +408,7 @@ export class AppController {
   }
 
   @Post("/v1/workers/:workerId/deployments/:deploymentId/stages/:stage")
-  async workerStage(@Req() request: Request, @Param("workerId") workerId: string, @Param("deploymentId") deploymentId: string, @Param("stage") stage: string, @Body() body: { status?: "RUNNING" | "SUCCEEDED" | "FAILED"; message?: string }) {
+  async workerStage(@Req() request: Request, @Param("workerId") workerId: string, @Param("deploymentId") deploymentId: string, @Param("stage") stage: string, @Body() body: { status?: "RUNNING" | "SUCCEEDED" | "FAILED" | "SKIPPED"; message?: string }) {
     await this.authenticatedWorker(request, workerId);
     const deployment = await db.deployment.findFirst({ where: { id: deploymentId, targetWorkerId: workerId, status: DeploymentStatus.RUNNING }, select: { id: true } });
     if (!deployment) throw new NotFoundException("Active deployment not found");

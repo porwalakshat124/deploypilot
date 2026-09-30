@@ -34,6 +34,10 @@ app.use(json({ limit: "1mb", verify: (request, _response, buffer) => { (request 
 app.useGlobalFilters({ catch(exception: unknown, host: ArgumentsHost) {
   const response = host.switchToHttp().getResponse<Response>();
   const status = exception instanceof HttpException ? exception.getStatus() : 500;
+  if (status === 500) {
+    const code = exception && typeof exception === "object" && "code" in exception ? String(exception.code) : undefined;
+    console.error(JSON.stringify({ requestId: response.getHeader("X-Request-ID"), error: exception instanceof Error ? exception.name : "UnknownError", code }));
+  }
   const body = exception instanceof HttpException ? exception.getResponse() : null;
   const message = typeof body === "object" && body && "message" in body ? body.message : status === 500 ? "Internal server error" : String(body);
   if (!response.headersSent) response.status(status).json({ statusCode: status, message, requestId: response.getHeader("X-Request-ID") });

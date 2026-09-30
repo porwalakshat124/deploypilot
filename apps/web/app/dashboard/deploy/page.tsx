@@ -15,7 +15,7 @@ export default function DeployPage() {
   const [configId, setConfigId] = useState(""), [environmentId, setEnvironmentId] = useState(""), [workerId, setWorkerId] = useState("");
   const [profile, setProfile] = useState<Profile>(initial), [args, setArgs] = useState("{}"), [command, setCommand] = useState("[]");
   const [message, setMessage] = useState(""), [busy, setBusy] = useState(false);
-  const applySetup = (data: Setup) => { setSetup(data); setConfigId(data.configs[0]?.id ?? ""); setEnvironmentId(data.environments[0]?.id ?? ""); setWorkerId(data.workers.find(w => !w.revokedAt)?.id ?? ""); };
+  const applySetup = (data: Setup) => { setSetup(data); setConfigId(data.configs[0]?.id ?? ""); setEnvironmentId(current => data.environments.some(e => e.id === current) ? current : data.environments[0]?.id ?? ""); setWorkerId(current => data.workers.some(w => w.id === current && !w.revokedAt) ? current : data.workers.find(w => !w.revokedAt && w.lastSeenAt && Date.now() - new Date(w.lastSeenAt).getTime() < 90000)?.id ?? ""); };
   useEffect(() => {
     let active = true; setSetup(null); setConfigId(""); setWorkerId(""); setEnvironmentId("");
     const defaultBranch = repositories.find(r => r.id === repoId)?.defaultBranch ?? "main";
