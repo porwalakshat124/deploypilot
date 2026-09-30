@@ -15,11 +15,16 @@ export class DeploymentExecutor {
     const timeout = setTimeout(() => abort.abort(new Error("Deployment timed out")), Math.min(job.profile.timeoutSeconds || 900, 3600) * 1000);
     let cancelled = false, checking = false, committed = false, finalizing = false, preserve = false, stage = "docker-build";
     let logs = Promise.resolve();
-    let queuedLogs = 0;
+    const pendingLogs: { stage: string; level: string; message: string }[] = [];
+    let drainingLogs = false;
     const output = (line: string) => {
-      if (++queuedLogs > 500) { abort.abort(new Error("Log delivery cannot keep up with build output")); queuedLogs--; return; }
-      const logStage = stage;
-      logs = logs.then(() => api.log(job.deploymentId, logStage, "info", line)).then(() => { queuedLogs--; }).catch(error => { queuedLogs--; abort.abort(error); });
+      if (pendingLogs.length >= 500) { abort.abort(new Error("Log delivery cannot keep up with build output")); return; }
+      pendingLogs.push({ stage, level: "info", message: line.slice(0, 8000) });
+      if (drainingLogs) return;
+      drainingLogs = true;
+      logs = logs.then(async () => {
+        while (pendingLogs.length) await api.logs(job.deploymentId, pendingLogs.splice(0, 50));
+      }).catch(error => { pendingLogs.length = 0; abort.abort(error); }).finally(() => { drainingLogs = false; });
     };
     const check = async () => {
       if (checking) return;

@@ -15,7 +15,7 @@ import { createWorkerToken, hashWorkerToken, workerTokenMatches } from "./worker
 import { branchFromRef, verifyGitHubSignature, type PushPayload } from "./github-webhook.js";
 import { DiagnosisService } from "./diagnosis.service.js";
 import { validateProfile } from "./build-profile.js";
-import { appendLog, finishDeployment } from "./execution-state.js";
+import { appendLog, appendLogs, finishDeployment } from "./execution-state.js";
 import { r2 } from "./r2.service.js";
 import { NotificationsService } from "./notifications.service.js";
 import { DeploymentEffectsService } from "./deployment-effects.service.js";
@@ -432,6 +432,15 @@ export class AppController {
     if (!deployment || !body.message) throw new NotFoundException("Active deployment log was not found");
     await this.logForWorker(deploymentId, body.stage ?? "system", body.level ?? "info", body.message);
     return { accepted: true };
+  }
+
+  @Post("/v1/workers/:workerId/deployments/:deploymentId/logs/batch")
+  async workerLogs(@Req() request: Request, @Param("workerId") workerId: string, @Param("deploymentId") deploymentId: string, @Body() body: { entries?: { stage: string; level: string; message: string }[] }) {
+    await this.authenticatedWorker(request, workerId);
+    if (!await db.deployment.findFirst({ where: { id: deploymentId, targetWorkerId: workerId, status: "RUNNING" }, select: { id: true } })) throw new NotFoundException("Active deployment not found");
+    if (!Array.isArray(body.entries) || body.entries.some(item => !item || typeof item !== "object")) throw new BadRequestException("Invalid log entries");
+    await appendLogs(deploymentId, body.entries);
+    return { accepted: body.entries.length };
   }
 
   @Post("/v1/workers/:workerId/deployments/:deploymentId/complete")

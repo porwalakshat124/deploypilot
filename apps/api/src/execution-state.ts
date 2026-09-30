@@ -2,6 +2,19 @@ import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { db } from "@deploypilot/database/client";
 import { redactLog } from "./diagnosis-context.js";
 
+export async function appendLogs(deploymentId: string, input: { stage: string; level: string; message: string }[]) {
+  if (!input.length || input.length > 50 || input.some(item => typeof item.message !== "string" || typeof item.stage !== "string" || typeof item.level !== "string")) throw new BadRequestException("Provide between 1 and 50 log entries");
+  await db.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "Deployment" WHERE id = ${deploymentId} FOR UPDATE`;
+    if (!await tx.deployment.findFirst({ where: { id: deploymentId, status: "RUNNING" } })) throw new NotFoundException("Deployment is no longer running");
+    const last = await tx.deploymentLog.findFirst({ where: { deploymentId }, orderBy: { sequence: "desc" }, select: { sequence: true } });
+    const createdAt = new Date();
+    const entries = input.map((item, index) => ({ deploymentId, sequence: (last?.sequence ?? 0) + index + 1, stage: item.stage.slice(0, 64), level: item.level.slice(0, 16), message: redactLog(item.message).slice(0, 8000), createdAt }));
+    await tx.deploymentLog.createMany({ data: entries });
+    await tx.deploymentEvent.createMany({ data: entries.map(({ sequence, stage, level, message }) => ({ deploymentId, type: "log.appended", payload: { sequence, stage, level, message, createdAt: createdAt.toISOString() } })) });
+  });
+}
+
 export async function appendLog(deploymentId: string, stage: string, level: string, input: string) {
   const message = redactLog(input).slice(0, 8000);
   await db.$transaction(async tx => {
