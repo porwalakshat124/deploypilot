@@ -10,9 +10,10 @@ vi.mock("@supabase/supabase-js", () => ({ createClient: () => ({ auth: { getUser
 import { AppController } from "./app.js";
 const user = { id: "owner" };
 const auth = { user: vi.fn().mockResolvedValue(user) };
-const github = { resolveCommit: vi.fn().mockResolvedValue("a".repeat(40)) };
+const github = { resolveCommit: vi.fn().mockResolvedValue("a".repeat(40)), listBranches: vi.fn(), discoverDockerfiles: vi.fn() };
 const controller = new AppController(auth as never, github as never, {} as never, {} as never);
 const request = { headers: {} } as Request;
+const discoveryRequest = (query: Record<string, unknown>) => ({ headers: {}, query }) as unknown as Request;
 const profile = { strategy: "DOCKERFILE", timeoutSeconds: 900, port: 3000, healthcheckPath: "/" };
 const repository = () => ({ id: "repo", defaultBranch: "main", installation: { installationId: "123" }, fullName: "owner/repo", configs: [{ id: "config", branchRule: "main", profile }], environments: [{ id: "env" }], workers: [{ id: "worker", revokedAt: null }] });
 beforeEach(() => { vi.clearAllMocks(); db.repository.findFirst.mockResolvedValue(repository()); db.deployment.create.mockResolvedValue({ id: "deployment", status: "QUEUED", commitSha: "a".repeat(40) }); });
@@ -43,5 +44,22 @@ describe("repository and execution authorization", () => {
     db.worker.findUnique.mockResolvedValue(null);
     await expect(controller.workerStatus(request, "worker", "deployment")).rejects.toThrow();
     expect(db.deployment.findFirst).not.toHaveBeenCalled();
+  });
+  it("scopes branch and Dockerfile discovery to the repository owner", async () => {
+    db.repository.findFirst.mockResolvedValue(null);
+    await expect(controller.repositoryBranches(discoveryRequest({}), "foreign")).rejects.toThrow("Repository not found");
+    await expect(controller.repositoryDockerfiles(discoveryRequest({}), "foreign")).rejects.toThrow("Repository not found");
+    expect(github.listBranches).not.toHaveBeenCalled(); expect(github.discoverDockerfiles).not.toHaveBeenCalled();
+  });
+  it("uses the default branch and installation of the owned repository", async () => {
+    await controller.repositoryDockerfiles(discoveryRequest({}), "repo");
+    expect(github.discoverDockerfiles).toHaveBeenCalledWith("123", "owner/repo", "main");
+    await controller.repositoryBranches(discoveryRequest({ page: "2" }), "repo");
+    expect(github.listBranches).toHaveBeenCalledWith("123", "owner/repo", 2);
+  });
+  it("rejects malformed discovery query parameters", async () => {
+    await expect(controller.repositoryBranches(discoveryRequest({ page: "1&evil=1" }), "repo")).rejects.toThrow("Invalid branch page");
+    await expect(controller.repositoryDockerfiles(discoveryRequest({ branch: ["main", "other"] }), "repo")).rejects.toThrow("valid branch");
+    expect(github.listBranches).not.toHaveBeenCalled(); expect(github.discoverDockerfiles).not.toHaveBeenCalled();
   });
 });

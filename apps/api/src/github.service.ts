@@ -1,4 +1,4 @@
-import { Injectable, InternalServerErrorException, ForbiddenException } from "@nestjs/common";
+import { Injectable, InternalServerErrorException, ForbiddenException, BadRequestException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { createAppAuth } from "@octokit/auth-app";
 import { readFileSync } from "node:fs";
 
@@ -29,6 +29,39 @@ export class GitHubService {
     const auth = createAppAuth({ appId: this.appId, privateKey: this.privateKey });
     const result = await auth({ type: "installation", installationId });
     return result.token;
+  }
+
+  private async sourceRequest(installationId: string, fullName: string, suffix: string) {
+    const token = await this.token(installationId);
+    const response = await fetch(`https://api.github.com/repos/${fullName}/${suffix}`, {
+      headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (response.status === 404) throw new NotFoundException("GitHub repository or branch was not found; synchronize repositories and check App access");
+    if (!response.ok) throw new ServiceUnavailableException("GitHub source discovery is unavailable; try again later");
+    return response;
+  }
+
+  async listBranches(installationId: string, fullName: string, page = 1) {
+    if (!Number.isInteger(page) || page < 1 || page > 10000) throw new BadRequestException("Invalid branch page");
+    const response = await this.sourceRequest(installationId, fullName, `branches?per_page=100&page=${page}`);
+    const branches = await response.json() as { name: string; commit: { sha: string }; protected: boolean }[];
+    return { branches: branches.map(b => ({ name: b.name, sha: b.commit.sha, protected: b.protected })), nextPage: /rel="next"/.test(response.headers.get("link") ?? "") ? page + 1 : null };
+  }
+
+  async discoverDockerfiles(installationId: string, fullName: string, branch: string) {
+    if (!branch || branch.length > 250 || /[\x00-\x1f\x7f]/.test(branch)) throw new BadRequestException("A valid branch is required");
+    const commitResponse = await this.sourceRequest(installationId, fullName, `commits/${encodeURIComponent(branch)}`);
+    const commit = await commitResponse.json() as { sha: string; commit: { tree: { sha: string } } };
+    const treeResponse = await this.sourceRequest(installationId, fullName, `git/trees/${commit.commit.tree.sha}?recursive=1`);
+    const tree = await treeResponse.json() as { tree: { path: string; type: string; mode: string }[]; truncated: boolean };
+    const dockerfiles = tree.tree.filter(entry => {
+      const name = entry.path.split("/").at(-1) ?? "";
+      return entry.type === "blob" && ["100644", "100755"].includes(entry.mode) && /^(Dockerfile(?:\.[^/]+)?|[^/]+\.Dockerfile)$/i.test(name)
+        && !entry.path.startsWith("-") && !/[\\:\x00-\x1f\x7f]/.test(entry.path) && !entry.path.split("/").some(part => part === ".." || !part);
+    }).map(entry => ({ path: entry.path, dockerContext: "." }));
+    dockerfiles.sort((a, b) => Number(b.path === "Dockerfile") - Number(a.path === "Dockerfile") || a.path.localeCompare(b.path));
+    return { branch, commitSha: commit.sha, dockerfiles, truncated: Boolean(tree.truncated) };
   }
 
   async listRepositories(installationId: string): Promise<GitHubRepository[]> {
