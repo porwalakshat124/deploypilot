@@ -22,6 +22,7 @@ const diagnosisSchema = {
 @Injectable()
 export class DiagnosisService {
   async diagnose(deploymentId: string) {
+    if (process.env.AI_DIAGNOSIS_ENABLED === "false") throw new ServiceUnavailableException("AI diagnosis is disabled for this workspace");
     const deployment = await db.deployment.findUniqueOrThrow({ where: { id: deploymentId }, include: { logs: { orderBy: { sequence: "desc" }, take: 120 }, stages: true, config: true } });
     const profile = deployment.config.profile as { requiredSecretNames?: string[] };
     const failedStage = deployment.stages?.find((stage) => stage.status === "FAILED")?.name;

@@ -64,7 +64,7 @@ export class AppController {
       { name: "PostgreSQL", configured: Boolean(process.env.DATABASE_URL), description: "Deployment records and durable job polling" },
       { name: "Cloudflare R2", configured: r2.configured(), description: "Archived logs and signed downloads" },
       { name: "Resend", configured: Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL), description: "Deployment result notifications" },
-      { name: "OpenAI", configured: Boolean(process.env.OPENAI_API_KEY), description: "Evidence-based failure diagnosis" }
+      { name: "OpenAI", configured: process.env.AI_DIAGNOSIS_ENABLED !== "false" && Boolean(process.env.OPENAI_API_KEY), description: process.env.AI_DIAGNOSIS_ENABLED === "false" ? "AI diagnosis is disabled for this workspace" : "Evidence-based failure diagnosis" }
     ], failedDeliveries, workerProtocol: "HTTPS polling", providerDelivery: "Configuration status does not prove successful delivery" };
   }
 
