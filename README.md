@@ -1,71 +1,54 @@
 # DeployPilot
 
-DeployPilot is a production-oriented deployment control plane for three connected workflows: a GitHub push can create a deployment, the dashboard can manage Docker workloads on registered computers, and the product can run as a live hosted service.
+DeployPilot connects GitHub repositories to Docker workers on machines you control. The Next.js dashboard uses a NestJS API and PostgreSQL. A worker downloads an immutable GitHub commit over authenticated HTTPS, builds an image, starts a restricted container, and reports live logs and HTTP health-check results.
 
-## Architecture
+## Current execution model
 
-The Next.js web application is designed for Vercel. The API owns authentication, authorization, GitHub webhooks, deployment records, and event streaming. Supabase provides PostgreSQL and Supabase Auth. Redis backs BullMQ. A DeployPilot Worker Agent runs on each Docker-capable computer and communicates outbound with the API; Docker is never exposed directly to the public internet. Cloudflare R2 stores archived logs and artifacts, Resend handles email notifications, and Cloudflare manages DNS.
+Remote agents poll durable QUEUED deployment rows through the API. Claims are transactional and limited to one running job per worker identity. Redis/BullMQ code remains in the repository for future background services, but deployment execution no longer adds jobs to an unconsumed BullMQ queue. Remote workers need no database, Redis, GitHub, Supabase, or OpenAI credentials.
 
-The code is intentionally portable. Production credentials, domains, hosting accounts, and billing remain under the owner's control and are never committed to this repository.
+Dockerfile install/test steps run inside the build. Their separate dashboard stages are marked SKIPPED; the worker never fabricates test success. SUCCEEDED means the container passed its configured HTTP health check on the worker host. Public ingress and environment URL routing must be configured separately.
 
-For local development, the GitHub App private key can be loaded from a file without pasting its contents into `.env`. Set `GITHUB_PRIVATE_KEY_PATH` to the absolute path of the downloaded `.pem` file. Use `GITHUB_PRIVATE_KEY` instead only when deploying to a secret manager that cannot mount a file.
+## Setup
 
-## Repository layout
+Use Node.js 22, pnpm 9.15, and a Linux Docker engine with Buildx on the worker. Use pnpm and the checked-in pnpm lockfile for this workspace.
 
-| Path | Responsibility |
-|---|---|
-| `apps/web` | Next.js dashboard deployed to Vercel |
-| `apps/api` | NestJS control-plane API |
-| `apps/worker` | BullMQ worker and future Docker execution adapter |
-| `packages/database` | Prisma schema for Supabase PostgreSQL |
-| `packages/shared` | Deployment, worker, and SSE contracts |
-| `infra` | Local Docker Compose services |
-| `docs` | Service setup and operational runbooks |
-| `scripts` | Worker installation and service setup scripts |
+1. Copy .env.example to a private .env and configure Supabase Auth, PostgreSQL, GitHub App, and API/web URLs.
+2. Install dependencies: pnpm install --frozen-lockfile.
+3. Review and apply the migrations to the intended database: pnpm --filter @deploypilot/database exec prisma migrate deploy --schema schema.prisma.
+4. Start the API: pnpm --filter @deploypilot/api dev.
+5. Start the web app: pnpm --filter @deploypilot/web dev.
+6. Sign in with GitHub. Synchronize your personal GitHub App installation on Repositories.
+7. Create an environment, register a worker, and copy its one-time credential to that worker's environment.
+8. Follow [worker installation](docs/worker-installation.md). Create a profile with the real Dockerfile path, build context, container port, and HTTP health-check path, then deploy.
 
-## Local start
+For local PostgreSQL, run docker compose -f infra/docker-compose.yml up -d postgres. The API container's Compose configuration uses this database. Supabase Auth remains a separate configured service.
 
-Install Node.js 20+, pnpm 9+, and Docker. Copy `.env.example` to `.env`, then start the local dependencies:
+For an existing database originally created with prisma db push, inspect its schema and migration history before baselining 0001_initial. Do not reset the database or blindly mark migrations applied. Migration 0002_event_sequence must be applied before this version's API is started.
 
-```bash
-cp .env.example .env
-cd infra
-cp ../.env .env
- docker compose up -d postgres redis
-cd ..
-pnpm install
-pnpm --filter @deploypilot/api dev
-pnpm --filter @deploypilot/worker dev
-```
+## Validation
 
-The API health endpoint is available at `http://localhost:4000/health`. The web application will be added to the same local workflow as the dashboard milestones are implemented.
+- pnpm test: unit and regression tests, including source safety, worker cancellation, terminal states, authorization, log redaction, and SSE parsing.
+- pnpm typecheck: all application TypeScript checks.
+- pnpm build: API, worker, and production Next.js build.
+- Set DOCKER_SMOKE=1 and run pnpm --filter @deploypilot/worker test on a Docker host for the real BuildKit/container/HTTP smoke test. It is skipped by default.
+- GitHub Actions runs checks and the Docker smoke test on Linux.
 
-For a user-controlled production worker, use the tagged installer instead of keeping VS Code open:
+The current workspace was verified with 68 passing tests, API/worker TypeScript builds, and a successful Next.js production build. Docker execution, hosted migrations, GitHub OAuth, and live production deployments were not verified on this machine.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/MrInfinityboss/deploypilot/v1.0.12/scripts/install-worker.sh | bash
-```
+## Runtime boundaries
 
-Windows users can run the PowerShell installer described in [`docs/PRODUCTION_RUNBOOK.md`](docs/PRODUCTION_RUNBOOK.md). Both installers configure the worker as an automatically restarting background service.
+Builds use a disposable Docker-container BuildKit builder with CPU and memory limits. Runtime containers have CPU/memory/PID limits, UID/GID 1000, a read-only root filesystem, a bounded /tmp, no added capabilities, no host volumes, and no mounted Docker socket. The trusted worker still has daemon access; use a dedicated machine for trusted repositories. This is not a hardened public multi-tenant sandbox. Build-time PID/egress isolation beyond BuildKit and host network controls still requires infrastructure policy.
 
-## Production setup order
+The runtime port is bound to a random worker-host loopback port. The worker log reports that endpoint. Successful containers are retained; failed/cancelled job resources and source directories are cleaned up. Rollouts do not replace previous successful containers or perform automatic rollback. Configure ingress and retention before production use.
 
-1. Create a Supabase project and place its pooled connection string in `DATABASE_URL` and direct connection string in `DIRECT_URL`.
-2. Configure Supabase Auth with GitHub as the provider and add the production callback URL.
-3. Create the GitHub App with minimum repository permissions and a webhook secret.
-4. Create a Redis instance and set `REDIS_URL`.
-5. Create a Cloudflare R2 bucket and configure its endpoint and credentials.
-6. Deploy `apps/web` to Vercel and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `NEXT_PUBLIC_API_URL`.
-7. Deploy the API to a Node-compatible host, then run migrations against Supabase.
-8. Install the worker agent on each Docker-capable computer. The agent will use a revocable worker credential and outbound HTTPS; do not publish the Docker socket.
-9. Configure the Cloudflare domain and Resend sender only after the application endpoints are working.
+Source tarballs are capped at 50 MiB compressed and 256 MiB unpacked. Links, special files, path traversal, and extended per-file archive metadata are rejected. Repositories using unsupported archive entries need adaptation before deployment.
 
-See [`docs/PRODUCTION_RUNBOOK.md`](docs/PRODUCTION_RUNBOOK.md) for the complete provider configuration, worker operations, recovery behavior, troubleshooting matrix, incident response, and release checklist. Never put production secrets in GitHub, source files, Docker images, or client-side environment variables.
+## Operations
 
-## Current production capabilities
+- [Remote worker setup and troubleshooting](docs/worker-installation.md)
+- [Implementation status and remaining work](docs/implementation-status.md)
+- [Production checklist](docs/production-checklist.md)
 
-The production system supports Supabase GitHub authentication, GitHub push deployments, BullMQ queueing, owner-controlled Docker workers, live deployment events and logs, retries and cancellation, dashboard metrics with automatic refresh, Cloudflare R2 log archives, Resend deployment notifications, grounded OpenAI diagnosis, worker token rotation, stale-worker recovery, request rate limits, webhook validation, and security response headers.
+Production requires explicit CORS_ORIGINS. Keep provider secrets server-side. Worker credentials are hashed, revocable, and rotatable. The API uses authorization-scoped queries, signed webhooks, redacted logs, request IDs, and an in-memory request limiter. Use shared ingress limits for multiple API replicas.
 
-## Safety boundary
-
-Builds execute only on explicitly registered workers. Repository input must be validated before reaching a process runner. Worker jobs must use disposable workspaces, timeouts, CPU/memory/PID limits, secret redaction, and a non-privileged container policy. The API must never mark a deployment successful; only the worker can finalize execution after final events are persisted.
+AI diagnosis uses the server's OPENAI_API_KEY and OPENAI_MODEL, redacted evidence, bounded output, and cached structured results. It is optional. R2 archives, Resend notifications and GitHub commit-status delivery use a durable retrying outbox. Optional providers require private configuration. Secret injection, teams, approvals and public ingress remain separate work; see the status document for the boundary.

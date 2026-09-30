@@ -1,125 +1,97 @@
-import { DeploymentStatus, StageStatus } from "@prisma/client";
-import { db } from "@deploypilot/database/client";
-import { DockerAdapter, DockerExecutionCancelledError } from "./docker-adapter.js";
-
-const stageNames = ["dependencies", "tests", "docker-build", "health-check", "deploy"] as const;
+import { DockerAdapter } from "./docker-adapter.js";
+import { withSourceWorkspace } from "./source-workspace.js";
+import type { ClaimedJob, WorkerApi } from "./worker-api.js";
 
 export class DeploymentExecutor {
-  private readonly docker = new DockerAdapter();
-
-  async execute(deploymentId: string) {
-    const claimed = await db.deployment.updateMany({ where: { id: deploymentId, status: DeploymentStatus.QUEUED }, data: { status: DeploymentStatus.RUNNING, startedAt: new Date() } });
-    if (claimed.count !== 1) return { skipped: true };
-
-    const cancellation = new AbortController();
-    let cancellationCheckRunning = false;
-    let pendingCancellationCheck: Promise<void> | undefined;
-    const cancellationMonitor = setInterval(() => {
-      if (cancellationCheckRunning) return;
-      cancellationCheckRunning = true;
-      pendingCancellationCheck = db.deployment.findUnique({ where: { id: deploymentId }, select: { status: true } }).then((deployment) => {
-        if (deployment?.status === DeploymentStatus.CANCELLED) cancellation.abort();
-      }).catch(() => undefined).finally(() => { cancellationCheckRunning = false; });
-    }, 2_500);
-    const stopCancellationMonitor = async () => {
-      clearInterval(cancellationMonitor);
-      await pendingCancellationCheck;
+  private active = new Set<string>();
+  constructor(private readonly docker = new DockerAdapter(), private readonly source = withSourceWorkspace) {}
+  async execute(job: ClaimedJob, api: WorkerApi, shutdown?: AbortSignal) {
+    if (this.active.has(job.deploymentId)) return { status: "DUPLICATE" };
+    this.active.add(job.deploymentId);
+    const abort = new AbortController();
+    const stop = () => abort.abort(new Error("Worker is shutting down"));
+    shutdown?.addEventListener("abort", stop, { once: true });
+    if (shutdown?.aborted) stop();
+    const timeout = setTimeout(() => abort.abort(new Error("Deployment timed out")), Math.min(job.profile.timeoutSeconds || 900, 3600) * 1000);
+    let cancelled = false, checking = false, committed = false, finalizing = false, preserve = false, stage = "docker-build";
+    let logs = Promise.resolve();
+    let queuedLogs = 0;
+    const output = (line: string) => {
+      if (++queuedLogs > 500) { abort.abort(new Error("Log delivery cannot keep up with build output")); queuedLogs--; return; }
+      const logStage = stage;
+      logs = logs.then(() => api.log(job.deploymentId, logStage, "info", line)).then(() => { queuedLogs--; }).catch(error => { queuedLogs--; abort.abort(error); });
     };
-
+    const check = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const state = await api.status(job.deploymentId);
+        if (state.status !== "RUNNING") { cancelled = true; abort.abort(new Error("Deployment cancelled or no longer active")); }
+      } catch { abort.abort(new Error("Lost contact with the control plane")); }
+      finally { checking = false; }
+    };
+    const poll = setInterval(() => void check(), 2000);
+    const name = "deploypilot-" + job.deploymentId;
+    const options = { signal: abort.signal, onOutput: output };
+    const policy = { timeoutSeconds: Math.min(job.profile.timeoutSeconds || 900, 3600), memoryLimitMb: 1024, cpuLimit: 1, pidsLimit: 256, networkMode: process.env.WORKER_BUILD_NETWORK === "none" ? "none" as const : "bridge" as const };
     try {
-      const deployment = await db.deployment.findUniqueOrThrow({ where: { id: deploymentId }, include: { config: true, repository: true } });
-      await this.throwIfCancelled(deploymentId, cancellation);
-      await this.event(deploymentId, "deployment.status", { deploymentId, status: DeploymentStatus.RUNNING });
-      await this.log(deploymentId, "system", "info", `Claimed commit ${deployment.commitSha}`);
-
-      for (const name of stageNames) {
-        await this.throwIfCancelled(deploymentId, cancellation);
-        const startedAt = new Date();
-        await db.deploymentStage.update({ where: { deploymentId_name: { deploymentId, name } }, data: { status: StageStatus.RUNNING, startedAt } });
-        await this.event(deploymentId, "stage.updated", { deploymentId, stage: name, status: StageStatus.RUNNING, startedAt });
-        await this.log(deploymentId, name, "info", `Starting ${name}`);
-
-        if (name === "docker-build") {
-          const profile = deployment.config.profile as { timeoutSeconds?: number };
-          await this.docker.build(
-            `deploypilot-${deployment.id.slice(0, 12)}`,
-            ".",
-            { strategy: "DOCKERFILE", timeoutSeconds: profile.timeoutSeconds ?? 900, requiredSecretNames: [] },
-            { timeoutSeconds: profile.timeoutSeconds ?? 900, memoryLimitMb: 1024, cpuLimit: 1, pidsLimit: 256, networkMode: "bridge" },
-            cancellation.signal,
-          );
-        }
-
-        await this.throwIfCancelled(deploymentId, cancellation);
-        const endedAt = new Date();
-        await db.deploymentStage.update({ where: { deploymentId_name: { deploymentId, name } }, data: { status: StageStatus.SUCCEEDED, endedAt } });
-        await this.event(deploymentId, "stage.updated", { deploymentId, stage: name, status: StageStatus.SUCCEEDED, startedAt, endedAt });
-        await this.log(deploymentId, name, "info", `Completed ${name}`);
-      }
-
-      await this.throwIfCancelled(deploymentId, cancellation);
-      const finalized = await db.deployment.updateMany({ where: { id: deploymentId, status: DeploymentStatus.RUNNING }, data: { status: DeploymentStatus.SUCCEEDED, endedAt: new Date() } });
-      if (finalized.count !== 1) { const current = await db.deployment.findUnique({ where: { id: deploymentId }, select: { status: true } }); return { status: current?.status ?? DeploymentStatus.CANCELLED }; }
-      await this.event(deploymentId, "deployment.status", { deploymentId, status: DeploymentStatus.SUCCEEDED });
-      await this.log(deploymentId, "system", "info", "Deployment succeeded");
-      return { status: DeploymentStatus.SUCCEEDED };
+      await check();
+      abort.signal.throwIfAborted();
+      if (!job.profile.port || !job.profile.healthcheckPath) throw new Error("Save a build profile with a container port and HTTP health-check path before deploying");
+      await api.log(job.deploymentId, "system", "info", "Worker claimed immutable commit " + job.commitSha);
+      for (const skipped of ["dependencies", "tests"]) await api.stage(job.deploymentId, skipped, "SKIPPED", "Declare this step in the repository Dockerfile");
+      await api.stage(job.deploymentId, stage, "RUNNING", "Downloading source and building Docker image");
+      const archive = await api.downloadSource(job.deploymentId, abort.signal);
+      await this.source(archive, async workspace => { await this.docker.build(name, workspace, job.profile, policy, options); }, abort.signal);
+      await logs;
+      abort.signal.throwIfAborted();
+      await api.stage(job.deploymentId, stage, "SUCCEEDED");
+      stage = "health-check";
+      await api.stage(job.deploymentId, stage, "RUNNING", "Starting a restricted container and checking HTTP readiness");
+      await this.docker.start(name, name, job.profile, policy, options);
+      const endpoint = await this.docker.health(name, job.profile, options);
+      await this.docker.logs(name, output);
+      await logs;
+      abort.signal.throwIfAborted();
+      await api.stage(job.deploymentId, stage, "SUCCEEDED", "HTTP health check passed");
+      stage = "deploy";
+      await api.stage(job.deploymentId, stage, "RUNNING");
+      await api.log(job.deploymentId, stage, "info", "Container " + name + " is running at " + endpoint + " on the worker host. Public ingress is configured separately.");
+      await api.stage(job.deploymentId, stage, "SUCCEEDED");
+      await check();
+      abort.signal.throwIfAborted();
+      finalizing = true;
+      await api.complete(job.deploymentId, "SUCCEEDED", "Container started and HTTP health check passed");
+      committed = true;
+      return { status: "SUCCEEDED" };
     } catch (error) {
-      await stopCancellationMonitor();
-      if (error instanceof DockerExecutionCancelledError || cancellation.signal.aborted) {
-        await this.markCancelled(deploymentId);
-        return { status: DeploymentStatus.CANCELLED };
+      if (finalizing) {
+        try {
+          const state = await api.status(job.deploymentId);
+          if (state.status === "SUCCEEDED") { committed = true; return { status: "SUCCEEDED" }; }
+          if (state.status === "CANCELLED") cancelled = true;
+        } catch {
+          // The completion may have committed even if its response was lost.
+          preserve = true;
+          console.error("[worker] completion unconfirmed; preserving container for", job.deploymentId);
+          return { status: "UNKNOWN" };
+        }
       }
-
+      await this.docker.logs(name, output).catch(() => undefined);
+      await logs;
       const message = error instanceof Error ? error.message : "Deployment failed";
-      const status = message.includes("timed out") ? DeploymentStatus.TIMED_OUT : DeploymentStatus.FAILED;
-      const activeStage = await db.deploymentStage.findFirst({ where: { deploymentId, status: StageStatus.RUNNING }, select: { name: true } });
-      if (activeStage) {
-        const endedAt = new Date();
-        await db.deploymentStage.update({ where: { deploymentId_name: { deploymentId, name: activeStage.name } }, data: { status: StageStatus.FAILED, endedAt } });
-        await this.event(deploymentId, "stage.updated", { deploymentId, stage: activeStage.name, status: StageStatus.FAILED, endedAt });
-      }
-      const finalized = await db.deployment.updateMany({ where: { id: deploymentId, status: DeploymentStatus.RUNNING }, data: { status, endedAt: new Date() } });
-      if (finalized.count === 1) {
-        await this.event(deploymentId, "deployment.status", { deploymentId, status });
-        await this.log(deploymentId, "system", "error", message);
+      const status = cancelled ? "CANCELLED" : /timed out/i.test(message) ? "TIMED_OUT" : "FAILED";
+      if (!cancelled) {
+        await api.stage(job.deploymentId, stage, "FAILED", message).catch(() => undefined);
+        await api.complete(job.deploymentId, status === "TIMED_OUT" ? "TIMED_OUT" : "FAILED", message).catch(() => undefined);
       }
       return { status };
     } finally {
-      clearInterval(cancellationMonitor);
+      clearTimeout(timeout);
+      clearInterval(poll);
+      shutdown?.removeEventListener("abort", stop);
+      if (!committed && !preserve) await this.docker.cleanup(name, name);
+      this.active.delete(job.deploymentId);
     }
-  }
-
-  private async throwIfCancelled(deploymentId: string, cancellation: AbortController) {
-    if (cancellation.signal.aborted) {
-      cancellation.abort();
-      throw new DockerExecutionCancelledError();
-    }
-  }
-
-  private async markCancelled(deploymentId: string) {
-    const stage = await db.deploymentStage.findFirst({ where: { deploymentId, status: StageStatus.RUNNING }, select: { name: true } });
-    if (stage) {
-      const endedAt = new Date();
-      await db.deploymentStage.update({ where: { deploymentId_name: { deploymentId, name: stage.name } }, data: { status: StageStatus.FAILED, endedAt } });
-      await this.event(deploymentId, "stage.updated", { deploymentId, stage: stage.name, status: StageStatus.FAILED, endedAt, reason: "cancelled" });
-    }
-    const finalized = await db.deployment.updateMany({ where: { id: deploymentId, status: { in: [DeploymentStatus.RUNNING, DeploymentStatus.QUEUED] } }, data: { status: DeploymentStatus.CANCELLED, endedAt: new Date() } });
-    if (finalized.count === 1) {
-      await this.event(deploymentId, "deployment.status", { deploymentId, status: DeploymentStatus.CANCELLED });
-      await this.log(deploymentId, "system", "warn", "Deployment cancelled by user");
-    }
-  }
-
-  private async log(deploymentId: string, stage: string, level: string, message: string) {
-    const last = await db.deploymentLog.findFirst({ where: { deploymentId }, orderBy: { sequence: "desc" }, select: { sequence: true } });
-    const sequence = (last?.sequence ?? 0) + 1;
-    await db.$transaction([
-      db.deploymentLog.create({ data: { deploymentId, sequence, stage, level, message } }),
-      db.deploymentEvent.create({ data: { deploymentId, type: "log.appended", payload: { sequence, stage, level, message } } }),
-    ]);
-  }
-
-  private async event(deploymentId: string, type: string, payload: Record<string, unknown>) {
-    await db.deploymentEvent.create({ data: { deploymentId, type, payload: payload as object } });
   }
 }

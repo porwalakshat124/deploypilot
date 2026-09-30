@@ -1,93 +1,66 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { createBrowserClient } from "@supabase/ssr";
 import { apiRequest } from "../../../../lib/api";
+import { watchDeployment } from "../../../../lib/deployment-stream";
+import { CopyButton } from "../../repository-context";
 import { Badge, Card, PageHeader, formatDate } from "../../ui";
-
-type Stage = { name: string; status: string; startedAt?: string; endedAt?: string };
-type Detail = { id: string; status: string; commitSha: string; createdAt: string; startedAt: string | null; endedAt: string | null; repository: { fullName: string }; environment: { name: string; url: string | null } | null; stages: Stage[]; config: { branchRule: string; version: number } };
-type Log = { sequence: number; stage: string; level: string; message: string; createdAt?: string };
-const stageNames = ["dependencies", "tests", "docker-build", "health-check", "deploy"];
-
+type Detail = { id: string; status: string; commitSha: string; targetWorkerId: string; createdAt: string; startedAt: string | null; endedAt: string | null; repository: { fullName: string }; environment: { name: string; url: string | null } | null; stages: { name: string; status: string; startedAt: string | null; endedAt: string | null }[]; config: { branchRule: string; version: number; profile: unknown }; diagnosis: { response: unknown } | null; events: { id: string; type: string; createdAt: string; payload: unknown }[] };
+type Log = { sequence: number; stage: string; level: string; message: string; createdAt: string };
 export default function DetailPage() {
-  const { deploymentId } = useParams<{ deploymentId: string }>();
-  const router = useRouter();
-  const [deployment, setDeployment] = useState<Detail | null>(null);
-  const [logs, setLogs] = useState<Log[]>([]);
-  const [connected, setConnected] = useState(false);
-  const [archiveUrl, setArchiveUrl] = useState("");
-  const [archiving, setArchiving] = useState(false);
-  const [message, setMessage] = useState("Loading deployment…");
-
-  const load = async () => {
-    try {
-      const detail = await apiRequest<Detail>(`/v1/deployments/${deploymentId}`);
-      const result = await apiRequest<{ logs: Log[] }>(`/v1/deployments/${deploymentId}/logs`);
-      setDeployment(detail);
-      setLogs(result.logs);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to load deployment.");
-    }
-  };
-
+  const { deploymentId } = useParams<{ deploymentId: string }>(), router = useRouter();
+  const [detail, setDetail] = useState<Detail | null>(null), [logs, setLogs] = useState<Log[]>([]);
+  const [connection, setConnection] = useState("Connecting…"), [message, setMessage] = useState(""), [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState(""), [level, setLevel] = useState(""), [stage, setStage] = useState("");
+  const [diagnosis, setDiagnosis] = useState<unknown>(null);
   useEffect(() => {
-    let source: EventSource | undefined;
-    let retry: number | undefined;
-    let closed = false;
-    void load();
-    const connect = async () => {
-      const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) return setMessage("Sign in to view live deployment events.");
-      const url = `${process.env.NEXT_PUBLIC_API_URL}/v1/deployments/${deploymentId}/events?access_token=${encodeURIComponent(data.session.access_token)}`;
-      source = new EventSource(url);
-      source.onopen = () => { setConnected(true); setMessage("Live event stream connected."); };
-      source.onerror = () => { setConnected(false); source?.close(); if (!closed) retry = window.setTimeout(connect, 2000); };
-      source.addEventListener("deployment.status", (event) => {
-        const payload = JSON.parse((event as MessageEvent).data) as { status: string };
-        setDeployment((previous) => previous ? { ...previous, status: payload.status } : previous);
-        if (!["QUEUED", "RUNNING"].includes(payload.status)) void load();
-      });
-      source.addEventListener("stage.updated", (event) => {
-        const payload = JSON.parse((event as MessageEvent).data) as Stage;
-        setDeployment((previous) => previous ? { ...previous, stages: previous.stages.map((stage) => stage.name === payload.name ? { ...stage, ...payload } : stage) } : previous);
-      });
-      source.addEventListener("log.appended", (event) => {
-        const payload = JSON.parse((event as MessageEvent).data) as Log;
-        setLogs((previous) => previous.some((log) => log.sequence === payload.sequence) ? previous : [...previous, payload].sort((a, b) => a.sequence - b.sequence));
-      });
+    const abort = new AbortController();
+    let cursor = 0, refreshing = false, dirty = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setDetail(null); setLogs([]); setDiagnosis(null);
+    const refresh = async () => {
+      if (refreshing || abort.signal.aborted) { dirty = true; return; }
+      refreshing = true; dirty = false;
+      try {
+        const data = await apiRequest<Detail>("/v1/deployments/" + deploymentId, { signal: abort.signal });
+        if (abort.signal.aborted) return;
+        setDetail(data); if (data.diagnosis) setDiagnosis(data.diagnosis.response);
+        let more = true;
+        while (more && !abort.signal.aborted) {
+          const page = await apiRequest<{ logs: Log[]; nextCursor: number; hasMore: boolean }>("/v1/deployments/" + deploymentId + "/logs?limit=500&cursor=" + cursor, { signal: abort.signal });
+          cursor = page.nextCursor; more = page.hasMore;
+          if (!abort.signal.aborted) setLogs(previous => [...new Map([...previous, ...page.logs].map(log => [log.sequence, log])).values()].sort((a, b) => a.sequence - b.sequence));
+        }
+        if (!["QUEUED", "RUNNING"].includes(data.status)) { setConnection("Complete"); abort.abort(); }
+      } catch (e) { if (!abort.signal.aborted) setMessage(e instanceof Error ? e.message : "Unable to refresh"); }
+      finally { refreshing = false; if (dirty && !abort.signal.aborted) schedule(); }
     };
-    void connect();
-    return () => { closed = true; if (retry) window.clearTimeout(retry); source?.close(); };
+    const schedule = () => { if (!timer) timer = setTimeout(() => { timer = undefined; void refresh(); }, 300); };
+    void refresh();
+    void watchDeployment(deploymentId, abort.signal, schedule, setConnection);
+    return () => { abort.abort(); if (timer) clearTimeout(timer); };
   }, [deploymentId]);
-
-  const action = async (path: string) => {
-    try { await apiRequest(`/v1/deployments/${deploymentId}/${path}`, { method: "POST" }); await load(); if (path === "retry") router.refresh(); }
-    catch (error) { setMessage(error instanceof Error ? error.message : "Action failed."); }
-  };
-
-  const archive = async () => {
-    setArchiving(true);
+  async function action(name: string) {
+    if (name === "cancel" && !window.confirm("Cancel this deployment?")) return;
+    setBusy(true);
     try {
-      const result = await apiRequest<{ downloadUrl?: string }>(`/v1/deployments/${deploymentId}/logs/archive`, { method: "POST" });
-      if (result.downloadUrl) setArchiveUrl(result.downloadUrl);
-      setMessage("Logs archived to Cloudflare R2.");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to archive logs."); }
-    finally { setArchiving(false); }
-  };
-
-  if (!deployment) return <><PageHeader eyebrow="Operations / Deployment" title="Deployment detail" /><Card>{message}</Card></>;
-  const terminal = !["QUEUED", "RUNNING"].includes(deployment.status);
-  return <>
-    <PageHeader eyebrow={`Operations / ${deployment.repository.fullName}`} title={deployment.commitSha.slice(0, 12)} description={`Created ${formatDate(deployment.createdAt)} · ${deployment.environment?.name ?? "No environment"} · profile ${deployment.config.branchRule} v${deployment.config.version}`} action={<div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-      {!terminal && <button className="dp-btn dp-btn-danger" onClick={() => action("cancel")}>Cancel</button>}
-      {["FAILED", "TIMED_OUT"].includes(deployment.status) && <><button className="dp-btn" onClick={() => action("retry")}>↻ Retry</button><button className="dp-btn dp-btn-primary" onClick={() => action("diagnose")}>✦ Diagnose</button></>}
-      {terminal && <button className="dp-btn" onClick={archive} disabled={archiving}>{archiving ? "Archiving…" : "Archive logs"}</button>}
-      {archiveUrl && <a className="dp-btn dp-btn-primary" href={archiveUrl} target="_blank" rel="noreferrer">Download logs</a>}
-    </div>} />
-    <Card style={{ marginBottom: 16 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}><div><div className="dp-kicker">Deployment status</div><div style={{ fontSize: 20, fontWeight: 800, marginTop: 8 }}>{deployment.status}</div></div><div style={{ display: "flex", gap: 10, alignItems: "center" }}><span style={{ fontSize: 11, color: connected ? "var(--green)" : "var(--muted)" }}>● {connected ? "LIVE" : "RECONNECTING"}</span><Badge status={deployment.status} /></div></div><div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 4 }}>{stageNames.map((name) => { const stage = deployment.stages.find((item) => item.name === name); return <div key={name}><div style={{ height: 7, borderRadius: 8, background: stage?.status === "SUCCEEDED" ? "var(--green)" : stage?.status === "RUNNING" ? "var(--yellow)" : stage?.status === "FAILED" ? "var(--red)" : "#303a4b" }} /><div style={{ fontSize: 10, color: "var(--muted)", marginTop: 8 }}>{name}</div></div>; })}</div></Card>
-    <div className="dp-grid-2" style={{ display: "grid", gridTemplateColumns: "1.25fr .75fr", gap: 16 }}><Card><div style={{ display: "flex", justifyContent: "space-between", marginBottom: 13 }}><h2 style={{ fontSize: 15, margin: 0 }}>Live logs</h2><span className="dp-mono" style={{ fontSize: 11, color: "var(--muted)" }}>{logs.length} lines</span></div><div style={{ background: "#080a0e", borderRadius: 9, padding: 16, minHeight: 350, maxHeight: 520, overflow: "auto" }}>{logs.length ? logs.map((log) => <div className="dp-mono" key={log.sequence} style={{ fontSize: 11, lineHeight: 1.8, color: log.level === "error" ? "var(--red)" : "#b6c1d1" }}><span style={{ color: "#657187", marginRight: 12 }}>{String(log.sequence).padStart(4, "0")}</span><span style={{ color: "var(--purple)", marginRight: 9 }}>{log.stage}</span>{log.message}</div>) : <div style={{ color: "var(--muted)", paddingTop: 120, textAlign: "center" }}>Waiting for worker events…</div>}</div></Card><Card><h2 style={{ fontSize: 15, margin: "0 0 18px" }}>Run details</h2><div style={{ display: "grid", gap: 15 }}>{[["Repository", deployment.repository.fullName], ["Commit", deployment.commitSha], ["Environment", deployment.environment?.name ?? "—"], ["Started", formatDate(deployment.startedAt)], ["Finished", formatDate(deployment.endedAt)]].map(([key, value]) => <div key={key}><div className="dp-kicker">{key}</div><div className="dp-mono" style={{ fontSize: 11, marginTop: 5, wordBreak: "break-all" }}>{value}</div></div>)}</div></Card></div>
-    <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 14 }}>{message}</div>
-  </>;
+      const result = await apiRequest<{ id?: string }>("/v1/deployments/" + deploymentId + "/" + name, { method: "POST" });
+      if (name === "retry" && result.id) router.push("/dashboard/deployments/" + result.id);
+      if (name === "diagnose") setDiagnosis(result);
+      setMessage(name === "cancel" ? "Cancellation requested." : "");
+    } catch (e) { setMessage(e instanceof Error ? e.message : "Action failed"); }
+    finally { setBusy(false); }
+  }
+  const filtered = logs.filter(l => (!stage || l.stage === stage) && (!level || l.level === level) && l.message.toLowerCase().includes(search.toLowerCase()));
+  function download() {
+    const url = URL.createObjectURL(new Blob([logs.map(l => l.sequence + " [" + l.stage + "/" + l.level + "] " + l.message).join("\n")], { type: "text/plain" }));
+    const a = document.createElement("a"); a.href = url; a.download = "deployment-" + deploymentId + ".log"; a.click(); URL.revokeObjectURL(url);
+  }
+  if (!detail) return <><PageHeader eyebrow="Operations / Deployment" title="Deployment detail" /><Card>{message || "Loading deployment…"}</Card></>;
+  return <><PageHeader eyebrow={"Operations / " + detail.repository.fullName} title={detail.commitSha.slice(0, 12)} description={detail.environment?.name + " · profile " + detail.config.branchRule + " v" + detail.config.version} action={<Badge status={detail.status} />} />
+    <Card><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}><CopyButton value={deploymentId} label="Copy deployment ID" /><CopyButton value={detail.commitSha} label="Copy commit" />{["QUEUED", "RUNNING"].includes(detail.status) && <button className="dp-btn dp-btn-danger" disabled={busy} onClick={() => action("cancel")}>Cancel</button>}{["FAILED", "CANCELLED", "TIMED_OUT"].includes(detail.status) && <button className="dp-btn" disabled={busy} onClick={() => action("retry")}>Retry</button>}{detail.status === "FAILED" && <button className="dp-btn dp-btn-primary" disabled={busy} onClick={() => action("diagnose")}>Diagnose failure</button>}</div><p role="status">{message || connection}</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 16 }}>{["dependencies", "tests", "docker-build", "health-check", "deploy"].map(name => { const s = detail.stages.find(s => s.name === name); return <div key={name}><p>{name}</p><Badge status={s?.status ?? "PENDING"} />{s?.startedAt && <p>{Math.max(0, Math.round(((s.endedAt ? Date.parse(s.endedAt) : Date.now()) - Date.parse(s.startedAt)) / 1000))}s</p>}</div>; })}</div>
+    </Card><Card style={{ marginTop: 16 }}><h2>Logs · {connection}</h2><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}><input className="dp-input" style={{ maxWidth: 300 }} aria-label="Search logs" placeholder="Search logs" value={search} onChange={e => setSearch(e.target.value)} /><select className="dp-select" style={{ width: 170 }} aria-label="Log stage" value={stage} onChange={e => setStage(e.target.value)}><option value="">All stages</option>{[...new Set(logs.map(l => l.stage))].map(s => <option key={s}>{s}</option>)}</select><select className="dp-select" style={{ width: 140 }} aria-label="Log level" value={level} onChange={e => setLevel(e.target.value)}><option value="">All levels</option><option>info</option><option>error</option><option>warn</option></select><button className="dp-btn" onClick={download}>Download logs</button></div><pre className="dp-mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: "#080a0e", padding: 16, maxHeight: 520, overflow: "auto", fontSize: 12 }}>{filtered.map(l => <div key={l.sequence} style={{ color: l.level === "error" ? "var(--red)" : "#bdc8d8" }}>{l.sequence} [{l.stage}/{l.level}] {l.message}</div>)}{!logs.length && "Waiting for worker output…"}</pre></Card>
+    <Card style={{ marginTop: 16 }}><h2>Run details</h2><p>Worker: <code>{detail.targetWorkerId}</code></p><p>Created {formatDate(detail.createdAt)} · Started {formatDate(detail.startedAt)} · Finished {formatDate(detail.endedAt)}</p>{detail.environment?.url && /^https?:\/\//.test(detail.environment.url) && <a className="dp-btn" href={detail.environment.url} target="_blank" rel="noreferrer">Open environment</a>}<details><summary>Build profile</summary><pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(detail.config.profile, null, 2)}</pre></details><details><summary>Recent events</summary>{detail.events.map(event => <p key={event.id}>{formatDate(event.createdAt)} · {event.type}<br /><code>{JSON.stringify(event.payload)}</code></p>)}</details></Card>
+    {diagnosis != null && <Card style={{ marginTop: 16 }}><h2>Failure diagnosis</h2><CopyButton value={JSON.stringify(diagnosis, null, 2)} label="Copy diagnosis" /><pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(diagnosis, null, 2)}</pre></Card>}</>;
 }
