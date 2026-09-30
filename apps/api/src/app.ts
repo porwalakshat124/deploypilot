@@ -106,6 +106,30 @@ export class AppController {
     return repository;
   }
 
+  private async sourceRepository(request: Request, repositoryId: string) {
+    const user = await this.auth.user(request);
+    const repository = await db.repository.findFirst({ where: { id: repositoryId, ownerId: user.id }, include: { installation: true } });
+    if (!repository) throw new NotFoundException("Repository not found");
+    if (!repository.installation) throw new BadRequestException("Repository has no GitHub installation");
+    return repository;
+  }
+
+  @Get("/v1/repositories/:repositoryId/branches")
+  async repositoryBranches(@Req() request: Request, @Param("repositoryId") repositoryId: string) {
+    const repository = await this.sourceRepository(request, repositoryId);
+    const value = request.query.page ?? "1";
+    if (typeof value !== "string" || !/^[1-9]\d{0,4}$/.test(value)) throw new BadRequestException("Invalid branch page");
+    return this.github.listBranches(repository.installation!.installationId, repository.fullName, Number(value));
+  }
+
+  @Get("/v1/repositories/:repositoryId/dockerfiles")
+  async repositoryDockerfiles(@Req() request: Request, @Param("repositoryId") repositoryId: string) {
+    const repository = await this.sourceRepository(request, repositoryId);
+    const branch = request.query.branch ?? repository.defaultBranch;
+    if (typeof branch !== "string") throw new BadRequestException("A valid branch is required");
+    return this.github.discoverDockerfiles(repository.installation!.installationId, repository.fullName, branch);
+  }
+
   @Post("/v1/repositories/:repositoryId/configs")
   async createConfig(@Req() request: Request, @Param("repositoryId") repositoryId: string, @Body() body: { branchRule?: string; profile?: Record<string, unknown> }) {
     const user = await this.auth.user(request);
