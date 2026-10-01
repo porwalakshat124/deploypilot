@@ -12,21 +12,25 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 function json(value: unknown, headers?: Record<string, string>) { return new Response(JSON.stringify(value), { headers }); }
 function commit() { fetchMock.mockResolvedValueOnce(json({ sha: "a".repeat(40), commit: { tree: { sha: "b".repeat(40) } } })); }
 describe("GitHub source discovery", () => {
-  it("discovers only the personal installation matching the verified durable identity", async () => {
-    fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json({id:99,login:"renamed-user",type:"User"})).mockResolvedValueOnce(json({id:42,account:{id:99,type:"User"},suspended_at:null}));
+  it("uses authenticated discovery and returns only the verified account installation", async () => {
+    fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json([{id:7,account:{id:101,type:"User",login:"other"}},{id:42,account:{id:99,type:"User",login:"renamed-user"},suspended_at:null}]));
     expect(await github.personalInstallation("99")).toEqual({installationId:"42",accountLogin:"renamed-user",installUrl:"https://github.com/apps/deploypilot-ap/installations/new"});
-    expect(fetchMock.mock.calls[1][0]).toBe("https://api.github.com/user/99");
-    expect(fetchMock.mock.calls[2][0]).toBe("https://api.github.com/users/renamed-user/installation");
+    expect(fetchMock.mock.calls[1][0]).toBe("https://api.github.com/app/installations?per_page=100&page=1");
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer test-token");
   });
-  it("offers App installation when the account has not connected it", async () => {
-    fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json({id:99,login:"new-user",type:"User"})).mockResolvedValueOnce(new Response("not installed",{status:404}));
-    expect(await github.personalInstallation("99")).toMatchObject({installationId:null,accountLogin:"new-user"});
+  it("offers installation without an unauthenticated account lookup", async () => {
+    fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json([{id:7,account:{id:101,type:"User",login:"other"}}]));
+    expect(await github.personalInstallation("99")).toMatchObject({installationId:null});
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
-  it("rejects another account's installation and suspended installations", async () => {
-    for(const installation of [{id:42,account:{id:101,type:"User"}},{id:42,account:{id:99,type:"User"},suspended_at:"today"}]) {
-      fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json({id:99,login:"user",type:"User"})).mockResolvedValueOnce(json(installation));
-      await expect(github.personalInstallation("99")).rejects.toThrow("unavailable");
-    }
+  it("rejects suspended installations", async () => {
+    fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json([{id:42,account:{id:99,type:"User",login:"user"},suspended_at:"today"}]));
+    await expect(github.personalInstallation("99")).rejects.toThrow("unavailable");
+  });
+  it("paginates and reports rate limits without exposing provider details", async () => {
+    fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json(Array.from({length:100},()=>({account:{id:101,type:"User"}})))).mockResolvedValueOnce(new Response("private details",{status:403}));
+    await expect(github.personalInstallation("99")).rejects.toThrow("rate limited");
+    expect(fetchMock.mock.calls[2][0]).toContain("page=2");
   });
   it("connects organizations only after verifying GitHub identity and active owner membership",async()=>{
     fetchMock.mockResolvedValueOnce(json({account:{id:10,type:"Organization",login:"org"}})).mockResolvedValueOnce(json({id:99})).mockResolvedValueOnce(json({role:"admin",state:"active"}));
