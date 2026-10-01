@@ -1,5 +1,6 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createHash } from "node:crypto";
 
 type ArchiveLog = { sequence: number; stage: string; level: string; message: string; createdAt: Date };
 
@@ -23,6 +24,17 @@ export class R2Service {
     if (!this.configured() || !this.client || !this.bucket) return null;
     const key = `deployments/${deploymentId}/logs.jsonl`;
     return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key, ResponseContentDisposition: `attachment; filename="deploypilot-${deploymentId}-logs.jsonl"` }), { expiresIn: 900 });
+  }
+
+  async encryptedBackup(backupId: string, kind: string, body: Buffer) {
+    if (!this.configured() || !this.client || !this.bucket) throw new Error("R2 is not configured");
+    const key = `backups/${backupId}/${kind}.dpbackup`;
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: "application/octet-stream", Metadata: { sha256, encrypted: "aes-256-gcm" } }));
+    const stored = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    const bytes = await stored.Body?.transformToByteArray();
+    if (!bytes || createHash("sha256").update(bytes).digest("hex") !== sha256) throw new Error("Offsite backup verification failed");
+    return { key, size: body.length, sha256, verified: true };
   }
 }
 

@@ -38,6 +38,7 @@ jobs:
       - run: pnpm --filter @deploypilot/database exec prisma db execute --schema schema.prisma --file ci-roles.sql
       - run: pnpm --filter @deploypilot/database exec prisma migrate deploy --schema schema.prisma
       - run: pnpm --filter @deploypilot/api exec tsx scripts/verify-tenancy.ts
+      - run: pnpm --filter @deploypilot/api exec tsx scripts/verify-rate-limit.ts
       - run: pnpm test
       - run: pnpm typecheck
       - run: node --input-type=module -e "await import('./packages/database/client.ts')"

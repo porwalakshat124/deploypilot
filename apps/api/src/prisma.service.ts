@@ -13,6 +13,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     if (this.recovering) return;
     this.recovering = true;
     try {
+      await db.$executeRaw`DELETE FROM "RateLimitBucket" WHERE "expiresAt" < CURRENT_TIMESTAMP`;
       const jobs = await db.deployment.findMany({ where: { status: "RUNNING" }, include: { config: true }, orderBy: { startedAt: "asc" }, take: 100 });
       for (const job of jobs) {
         if (!job.targetWorkerId || !job.startedAt) continue;

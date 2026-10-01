@@ -1,8 +1,10 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { HttpException, type ArgumentsHost } from "@nestjs/common";
-import { json, type Request, type Response, type NextFunction } from "express";
-import { randomUUID, createHash } from "node:crypto";
+import { json, raw, type Request, type Response, type NextFunction } from "express";
+import { validOperationsCredential } from "./operations-alerts.js";
+import { randomUUID } from "node:crypto";
+import { consumeRateLimit } from "./rate-limit.js";
 import { AppModule } from "./app.js";
 
 const configuredOrigins = process.env.CORS_ORIGINS ?? process.env.WEB_ORIGIN;
@@ -11,7 +13,6 @@ if (process.env.NODE_ENV === "production" && (!configuredOrigins || origins.incl
 const app = await NestFactory.create(AppModule, { bodyParser: false });
 app.enableShutdownHooks();
 app.enableCors({ origin: origins, allowedHeaders: ["Authorization", "Content-Type", "Last-Event-ID", "X-GitHub-Token"], exposedHeaders: ["X-Request-ID"] });
-const buckets = new Map<string, { count: number; reset: number }>();
 app.use((req: Request, res: Response, next: NextFunction) => {
   const requestId = randomUUID();
   res.setHeader("X-Request-ID", requestId);
@@ -19,16 +20,18 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Referrer-Policy", "no-referrer");
   const start = Date.now();
   res.on("finish", () => console.log(JSON.stringify({ requestId, method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - start })));
-  if (req.path === "/health") return next();
+  if (["/health", "/ready", "/health/ready"].includes(req.path)) return next();
   const worker = req.path.startsWith("/v1/workers/") && /\/(logs|stages|heartbeat|claim|status|complete|source|runtimes|runtime-commands|report)(\/|$)/.test(req.path);
-  const key = createHash("sha256").update((req.socket.remoteAddress ?? "") + ":" + (req.headers.authorization ?? "")).digest("hex");
-  if (buckets.size > 10000) for (const [id, value] of buckets) if (value.reset < Date.now()) buckets.delete(id);
-  if (!buckets.has(key) && buckets.size >= 10000) return res.status(429).json({ message: "Rate limiter capacity reached", requestId });
-  const bucket = buckets.get(key) ?? { count: 0, reset: Date.now() + 60000 };
-  if (bucket.reset < Date.now()) { bucket.count = 0; bucket.reset = Date.now() + 60000; }
-  buckets.set(key, bucket);
-  if (++bucket.count > (worker ? 6000 : 300)) { res.setHeader("Retry-After", "60"); return res.status(429).json({ message: "Too many requests. Try again shortly.", requestId }); }
-  next();
+  const identity = req.headers.authorization ?? req.socket.remoteAddress ?? "unknown-peer";
+  void consumeRateLimit(worker ? "worker" : "request", identity, worker ? 6000 : 300).then(allowed => {
+    if (allowed) return next();
+    res.setHeader("Retry-After", "60");
+    res.status(429).json({ message: "Too many requests. Try again shortly.", requestId });
+  }).catch(() => { res.status(503).json({ message: "Request protection temporarily unavailable", requestId }); });
+});
+app.use("/v1/operations/backups", (req: Request, res: Response, next: NextFunction) => {
+  if (!validOperationsCredential(req.headers.authorization)) return res.status(401).json({ message: "Unauthorized" });
+  raw({ type: "application/octet-stream", limit: "20mb" })(req, res, next);
 });
 app.use(json({ limit: "1mb", verify: (request, _response, buffer) => { (request as Request & { rawBody?: Buffer }).rawBody = Buffer.from(buffer); } }));
 app.useGlobalFilters({ catch(exception: unknown, host: ArgumentsHost) {

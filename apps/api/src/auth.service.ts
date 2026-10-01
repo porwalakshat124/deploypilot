@@ -1,4 +1,5 @@
-import { Injectable, ForbiddenException, UnauthorizedException } from "@nestjs/common";
+import { Injectable, ForbiddenException, UnauthorizedException, HttpException } from "@nestjs/common";
+import { consumeRateLimit } from "./rate-limit.js";
 import { createClient } from "@supabase/supabase-js";
 import type { Request } from "express";
 import { db } from "@deploypilot/database/client";
@@ -21,6 +22,7 @@ export class AuthService {
     if (!authorization?.startsWith("Bearer ")) throw new UnauthorizedException();
     const { data, error } = await supabase().auth.getUser(authorization.slice(7));
     if (error || !data.user || !data.user.email || !data.user.email_confirmed_at) throw new UnauthorizedException();
+    if (!await consumeRateLimit("user", data.user.id, 300)) throw new HttpException("Too many requests. Try again shortly.", 429);
     return db.user.upsert({ where: { supabaseId: data.user.id }, update: { email: data.user.email }, create: { supabaseId: data.user.id, email: data.user.email, displayName: data.user.user_metadata?.user_name ?? data.user.email } });
   }
 }

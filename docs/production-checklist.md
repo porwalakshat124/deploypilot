@@ -30,6 +30,11 @@ Do not treat local tests as proof of a live deployment. Record evidence for each
 
 ## Services still requiring implementation or configuration
 
-R2 log/artifact storage, Resend notifications, continuous uptime/error monitoring, environment-secret injection, rollout replacement and rollback are not completed. AI diagnosis needs a server-side key and a verified provider run. Organization/team authorization and distributed request limits require further work before multi-user production exposure.
+R2 logs, Resend deployment notifications, runtime secrets, promotion/recorded-image
+rollback and team authorization are implemented and verified. Shared request limits,
+encrypted backup/restore and operational monitoring are prepared in the current
+release. Use launch-gate.md for the precise pending validation/configuration:
+public routing is blocked, real organization/second-user checks remain, and the
+local monitor/backup are not independent managed infrastructure. AI stays disabled.
 
 Do not reuse stale claims from the original blueprint as launch evidence. The current implementation boundary is recorded in implementation-status.md.
