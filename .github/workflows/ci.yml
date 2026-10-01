@@ -9,6 +9,21 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deploypilot_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/deploypilot_test
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/deploypilot_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -20,6 +35,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: DATABASE_URL=postgresql://x:x@localhost:5432/x DIRECT_URL=postgresql://x:x@localhost:5432/x pnpm --filter @deploypilot/database validate
+      - run: pnpm --filter @deploypilot/database exec prisma db execute --schema schema.prisma --file ci-roles.sql
+      - run: pnpm --filter @deploypilot/database exec prisma migrate deploy --schema schema.prisma
+      - run: pnpm --filter @deploypilot/api exec tsx scripts/verify-tenancy.ts
       - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm build

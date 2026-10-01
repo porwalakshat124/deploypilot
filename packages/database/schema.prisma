@@ -36,9 +36,11 @@ model User {
   supabaseId  String   @unique
   email       String   @unique
   displayName String?
+  emailNotifications String @default("ALL")
   createdAt   DateTime @default(now())
   repositories Repository[]
   installations GitHubInstallation[]
+  memberships TeamMember[]
 }
 
 model GitHubInstallation {
@@ -55,6 +57,8 @@ model GitHubInstallation {
 model Repository {
   id              String   @id @default(uuid())
   ownerId         String
+  teamId          String?
+  team            Team? @relation(fields: [teamId], references: [id], onDelete: Restrict)
   owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   installationId  String?
   installation    GitHubInstallation? @relation(fields: [installationId], references: [id], onDelete: SetNull)
@@ -67,6 +71,7 @@ model Repository {
   deployments     Deployment[]
   workers         Worker[]
   @@index([ownerId])
+  @@index([teamId])
 }
 
 model Environment {
@@ -98,6 +103,11 @@ model Deployment {
   repository     Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   configId       String
   config         DeploymentConfig @relation(fields: [configId], references: [id])
+  sourceBranch   String?
+  requestedById  String?
+  approvalStatus String @default("NOT_REQUIRED")
+  approvedById   String?
+  approvedAt     DateTime?
   commitSha      String
   trigger        DeploymentTrigger
   status         DeploymentStatus @default(QUEUED)
@@ -113,6 +123,7 @@ model Deployment {
   diagnosis     AIDiagnosis?
   effects       DeploymentEffect[]
   @@index([repositoryId, createdAt])
+  @@index([targetWorkerId, status, createdAt], map: "Deployment_worker_queue_idx")
 }
 
 model DeploymentStage {
@@ -166,6 +177,8 @@ model Worker {
   repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
   name         String
   tokenHash    String   @unique
+  tokenExpiresAt DateTime?
+  credentialOwnerId String?
   version      String
   capabilities Json
   lastSeenAt   DateTime?
@@ -204,4 +217,56 @@ model DeploymentEffect {
   createdAt    DateTime @default(now())
   @@unique([deploymentId, kind])
   @@index([status, nextAttemptAt])
+}
+
+enum TeamRole {
+  OWNER
+  ADMIN
+  DEVELOPER
+  VIEWER
+}
+
+model Team {
+  id String @id @default(uuid())
+  name String
+  createdAt DateTime @default(now())
+  members TeamMember[]
+  invites TeamInvite[]
+  repositories Repository[]
+  audit TeamAudit[]
+}
+
+model TeamMember {
+  teamId String
+  userId String
+  role TeamRole
+  joinedAt DateTime @default(now())
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([teamId, userId])
+  @@index([userId])
+}
+
+model TeamInvite {
+  id String @id @default(uuid())
+  teamId String
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  email String
+  role TeamRole
+  tokenHash String @unique
+  expiresAt DateTime
+  usedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([teamId, createdAt])
+}
+
+model TeamAudit {
+  id String @id @default(uuid())
+  teamId String
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  actorId String
+  action String
+  subject String
+  createdAt DateTime @default(now())
+  @@index([teamId, createdAt])
 }

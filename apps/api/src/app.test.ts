@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
 vi.mock("@deploypilot/database/client", () => ({ db }));
 vi.mock("@supabase/supabase-js", () => ({ createClient: () => ({ auth: { getUser: vi.fn() } }) }));
 import { AppController } from "./app.js";
+import { repositoryAccess } from "./access.js";
 const user = { id: "owner" };
 const auth = { user: vi.fn().mockResolvedValue(user) };
 const github = { resolveCommit: vi.fn().mockResolvedValue("a".repeat(40)), listBranches: vi.fn(), discoverDockerfiles: vi.fn() };
@@ -21,7 +22,7 @@ describe("repository and execution authorization", () => {
   it("scopes repository lists to the verified user", async () => {
     db.repository.findMany.mockResolvedValue([]);
     await controller.listRepositories(request);
-    expect(db.repository.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { ownerId: "owner" } }));
+    expect(db.repository.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: repositoryAccess("owner") }));
   });
   it("does not accept a worker from another repository", async () => {
     await expect(controller.createDeployment(request, "repo", { configId: "config", environmentId: "env", workerId: "other-worker", branch: "main" })).rejects.toThrow("Worker does not belong");

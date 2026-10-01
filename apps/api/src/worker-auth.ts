@@ -13,3 +13,7 @@ export function workerTokenMatches(token: string, storedHash: string) {
   const expected = Buffer.from(storedHash, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
+
+export function workerIsActive(worker: { revokedAt?: Date | null; tokenExpiresAt?: Date | null } | null | undefined, now = Date.now()) {
+  return Boolean(worker && !worker.revokedAt && (!worker.tokenExpiresAt || worker.tokenExpiresAt.getTime() > now));
+}

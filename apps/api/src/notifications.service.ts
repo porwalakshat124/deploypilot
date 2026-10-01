@@ -9,9 +9,12 @@ export class NotificationsService {
 
     const deployment = await import("@deploypilot/database/client").then(({ db }) => db.deployment.findUnique({
       where: { id: deploymentId },
-      include: { repository: { include: { owner: true } }, environment: true },
+      include: { repository: { include: { owner: true, team: { include: { members: { where: { role: "OWNER" }, include: { user: true }, take: 1 } } } } }, environment: true },
     }));
-    if (!deployment?.repository.owner.email) return { sent: false, reason: "Deployment owner has no email" };
+    if (!deployment) return { sent: false, reason: "Deployment unavailable" };
+    const recipient = deployment.repository.teamId ? deployment.repository.team?.members[0]?.user : deployment.repository.owner;
+    if (!recipient?.email) return { sent: false, reason: "No current owner email" };
+    if (recipient.emailNotifications === "OFF" || (recipient.emailNotifications === "FAILURES" && status === "SUCCEEDED")) return { sent: false, reason: "Disabled by recipient preferences" };
 
     const succeeded = status === "SUCCEEDED";
     const subject = `${succeeded ? "Deployment succeeded" : "Deployment needs attention"} · ${deployment.repository.fullName}`;
@@ -27,7 +30,7 @@ export class NotificationsService {
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "Idempotency-Key": `deployment/${deploymentId}/${status}` },
-      body: JSON.stringify({ from, to: [deployment.repository.owner.email], subject, text }),
+      body: JSON.stringify({ from, to: [recipient.email], subject, text }),
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`Resend request failed with HTTP ${response.status}`);
