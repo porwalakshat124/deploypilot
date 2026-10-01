@@ -40,6 +40,7 @@ jobs:
       - run: pnpm --filter @deploypilot/api exec tsx scripts/verify-tenancy.ts
       - run: pnpm test
       - run: pnpm typecheck
+      - run: node --input-type=module -e "await import('./packages/database/client.ts')"
       - run: pnpm build
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
