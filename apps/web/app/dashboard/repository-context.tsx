@@ -6,7 +6,7 @@ import { useApiResource } from "../../lib/use-api-resource";
 import { Notice, useToast } from "./feedback";
 import { Empty } from "./ui";
 
-export type Repository = { id: string; fullName: string; defaultBranch: string; _count: { configs: number; environments: number }; workers: { id: string; lastSeenAt: string | null }[]; deployments: { id: string; status: string }[] };
+export type Repository = { id: string; teamId: string | null; fullName: string; defaultBranch: string; _count: { configs: number; environments: number }; workers: { id: string; lastSeenAt: string | null }[]; deployments: { id: string; status: string }[] };
 type Context = { repositories: Repository[]; repoId: string; setRepoId: (id: string) => void; loading: boolean; error: string; refresh: () => Promise<void> };
 const RepositoryContext = createContext<Context | null>(null);
 export function RepositoryProvider({ children }: { children: React.ReactNode }) {

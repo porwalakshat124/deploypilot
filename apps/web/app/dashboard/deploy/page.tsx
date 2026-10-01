@@ -6,6 +6,7 @@ import { apiRequest } from "../../../lib/api";
 import { RepositoryPicker, useRepository } from "../repository-context";
 import { Card, LoadingCards, PageHeader } from "../ui";
 import { Notice, useToast } from "../feedback";
+import { ProfileHistory } from "./profile-history";
 import { SourcePicker } from "./source-picker";
 type Profile = { strategy: "DOCKERFILE"; dockerfilePath: string; dockerContext: string; port: number; healthcheckPath: string; timeoutSeconds: number; requiredSecretNames: string[]; buildArgs?: Record<string, string>; command?: string[] };
 type Setup = { configs: { id: string; branchRule: string; version: number; profile: Profile }[]; environments: { id: string; name: string }[]; workers: { id: string; name: string; revokedAt: string | null; lastSeenAt: string | null }[] };
@@ -70,5 +71,5 @@ export default function DeployPage() {
         <label className="dp-label">Timeout (seconds)<input className="dp-input" type="number" min={10} max={3600} value={profile.timeoutSeconds} onChange={e => setProfile({ ...profile, timeoutSeconds: Number(e.target.value) })} /></label>
         <label className="dp-label">Non-secret build arguments (JSON object)<textarea className="dp-input" value={args} onChange={e => setArgs(e.target.value)} /></label>
         <label className="dp-label">Startup arguments (JSON array; empty uses image default)<textarea className="dp-input" value={command} onChange={e => setCommand(e.target.value)} /></label>
-      </div><button className="dp-btn dp-btn-primary" style={{ marginTop: 16 }} disabled={busy} onClick={saveProfile}>{busy ? "Saving…" : "Save profile version"}</button></Card>}</>;
+      </div><button className="dp-btn dp-btn-primary" style={{ marginTop: 16 }} disabled={busy} onClick={saveProfile}>{busy ? "Saving…" : "Save profile version"}</button></Card>}{setup && setup.configs.length > 1 && <ProfileHistory key={repoId} versions={setup.configs} />}</>;
 }
