@@ -1,6 +1,6 @@
 # DeployPilot production runbook
 
-The dashboard runs on Vercel, the API on Render, and PostgreSQL/Auth on Supabase. The Windows worker runs Docker Desktop's Linux engine. The remote execution protocol in release 1.1 uses authenticated outbound HTTPS polling and immutable source archives. Old BullMQ agents must be upgraded; they cannot execute jobs created by this API.
+The dashboard runs on Vercel, the API on Render, and PostgreSQL/Auth on Supabase. The Windows worker runs Docker Desktop's Linux engine. The remote execution protocol in release 1.2 uses authenticated outbound HTTPS polling and immutable source archives. Old BullMQ agents must be upgraded; they cannot execute jobs created by this API.
 
 ## Release order
 
@@ -31,3 +31,7 @@ Successful containers are retained on the worker's loopback interface. A public 
 Check /health/ready, Docker Desktop readiness, worker heartbeat and the deployment's stored stages/logs. The API recovers offline/deadline-exceeded RUNNING jobs. Do not manually mark a build successful. Keep the previous application release available; the additive database migrations remain compatible with it. Rolling the control plane back requires restoring the corresponding legacy worker protocol too.
 
 Docker runtime-socket repair during this release preserved the old runtime directory as run.deploypilot-backup-20260930; no image/volume data was removed.
+
+## Launch preparation
+
+See launch-gate.md for the current recovery, rate-limit, alert, retention and public-launch boundary. Public routing remains blocked at the owner's request. Operator configuration lives in the ignored, ACL-protected .env.operations; configure-operations.mjs selects the single existing account and installed worker. If the database has multiple users, select the authorized operator explicitly rather than guessing. Never upload backup.key with the encrypted offsite files.

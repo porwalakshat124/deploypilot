@@ -311,3 +311,12 @@ model RuntimeCommand {
   endedAt DateTime?
   @@index([status, createdAt])
 }
+
+model RateLimitBucket {
+  key String
+  windowStart DateTime
+  count Int
+  expiresAt DateTime
+  @@id([key, windowStart])
+  @@index([expiresAt])
+}

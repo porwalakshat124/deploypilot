@@ -12,6 +12,7 @@ import { RuntimeController } from "./runtime.controller.js";
 import { SecretsController } from "./secrets.controller.js";
 import { snapshotSecrets, runtimeEnvironment } from "./environment-secrets.js";
 import { OperationsController } from "./operations.controller.js";
+import { OperationsAlerts, OperationsAlertController } from "./operations-alerts.js";
 import { TeamsController } from "./teams.controller.js";
 import { repositoryAccess } from "./access.js";
 import { environmentPolicy, assertEnvironmentTarget } from "./environment-policy.js";
@@ -586,5 +587,5 @@ export class AppController {
   }
 }
 
-@Module({ controllers: [RepositoryLifecycleController, AppController, TeamsController, OperationsController, SecretsController, RuntimeController, ReleasesController], providers: [AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
+@Module({ controllers: [OperationsAlertController, RepositoryLifecycleController, AppController, TeamsController, OperationsController, SecretsController, RuntimeController, ReleasesController], providers: [OperationsAlerts, AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
 export class AppModule {}
