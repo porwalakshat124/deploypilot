@@ -25,9 +25,9 @@ team applications to the internet to bypass this gate.
 - Windows external endpoint monitor every five minutes and daily backup at 02:00.
   The tasks run as the existing user with limited privileges. This PC must be awake,
   logged in, online and running Docker. They are not independent managed services.
-- Retention candidate report defaults to 30 days (minimum 7), excludes active runs
-  and requires a successful R2 archive. It is preview-only: no history, audit events,
-  backups, archives or Docker images are automatically deleted.
+- Searchable logs retain 30 days and compact only after a checksum-verified R2
+  archive. Local encrypted backups retain 30 days with seven newest and the latest
+  restore-tested copy preserved. R2 archives, history and Docker images remain.
 
 ## Recovery commands
 
@@ -53,13 +53,12 @@ recovery plan. A public-schema restore is not a full Supabase project restore.
    not replace these identity-provider checks.
 3. Secure external custody of backup.key, Supabase Auth recovery procedure and a
    restore drill using the offsite recovery materials on another trusted host.
-4. Independent uptime alert transport: the local monitor queues outage signals
-   while the API is unreachable and sends them after recovery. It cannot email
-   through an unavailable API, and cannot detect outages while this PC is off.
-5. Choose/activate archival expiry and Docker rollback-image retention only after
-   recovery requirements are agreed. Current preview mode erases nothing.
+4. Independent uptime monitoring is complete: UptimeRobot checks the API and
+   frontend every five minutes, both report Up, and a notification test was sent.
+5. Review R2 and Docker storage usage as data grows; cloud archives and rollback
+   images are preserved, with no broad Docker prune or bucket deletion.
 6. Larger authenticated user load/soak testing, region/capacity review, host egress
-   policy and independent security review. A 30-request read-only check is limited
+   policy and independent security review. A 120-request read-only check is limited
    evidence, not a scale claim. AI remains disabled by the owner's decision.
 
 The launch gate remains closed until these requirements are evidenced and the
