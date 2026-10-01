@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Request } from "express";
 const db = vi.hoisted(() => ({
   repository: { findMany: vi.fn(), findFirst: vi.fn() },
-  deployment: { create: vi.fn(), findFirst: vi.fn() },
+  deployment: { create: vi.fn(), findFirst: vi.fn(), findMany:vi.fn(), groupBy:vi.fn() },
+  deploymentEvent:{create:vi.fn()},
+  $queryRaw:vi.fn(),
+  $transaction:vi.fn(),
   worker: { findUnique: vi.fn() }
 }));
 vi.mock("@deploypilot/database/client", () => ({ db }));
@@ -17,8 +20,19 @@ const request = { headers: {} } as Request;
 const discoveryRequest = (query: Record<string, unknown>) => ({ headers: {}, query }) as unknown as Request;
 const profile = { strategy: "DOCKERFILE", timeoutSeconds: 900, port: 3000, healthcheckPath: "/" };
 const repository = () => ({ id: "repo", defaultBranch: "main", installation: { installationId: "123" }, fullName: "owner/repo", configs: [{ id: "config", branchRule: "main", profile }], environments: [{ id: "env" }], workers: [{ id: "worker", revokedAt: null }] });
-beforeEach(() => { vi.clearAllMocks(); db.repository.findFirst.mockResolvedValue(repository()); db.deployment.create.mockResolvedValue({ id: "deployment", status: "QUEUED", commitSha: "a".repeat(40) }); });
+beforeEach(() => { vi.clearAllMocks(); db.$transaction.mockImplementation(fn=>fn(db)); db.repository.findFirst.mockResolvedValue(repository()); db.deployment.create.mockResolvedValue({ id: "deployment", status: "QUEUED", commitSha: "a".repeat(40) }); });
 describe("repository and execution authorization", () => {
+  it("does not expose encrypted secret snapshots in the dashboard overview",async()=>{
+    db.deployment.findMany.mockResolvedValue([{id:"deployment",secretSnapshot:[{ciphertext:"sealed-value",name:"PRIVATE_KEY"}]}]);db.deployment.groupBy.mockResolvedValue([]);
+    expect(await controller.latestDeployment(request)).toEqual({deployments:[{id:"deployment"}],counts:[]});
+  });
+  it("preserves the immutable rollback image when retrying a failed release",async()=>{
+    const repo=repository();repo.workers[0]= {...repo.workers[0],capabilities:{runtimeManagement:true}} as never;
+    const imageId="sha256:"+"b".repeat(64);
+    db.deployment.findFirst.mockResolvedValue({id:"failed",repositoryId:"repo",configId:"config",environmentId:"env",targetWorkerId:"worker",commitSha:"a".repeat(40),sourceBranch:"main",releaseKind:"ROLLBACK",reuseImageId:imageId,sourceDeploymentId:"source",repository:repo});
+    await controller.retry(request,"failed");
+    expect(db.deployment.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({reuseImageId:imageId,releaseKind:"ROLLBACK",sourceDeploymentId:"source"})}));
+  });
   it("scopes repository lists to the verified user", async () => {
     db.repository.findMany.mockResolvedValue([]);
     await controller.listRepositories(request);
