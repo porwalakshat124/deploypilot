@@ -209,7 +209,7 @@ export class AppController {
     const user = await this.auth.user(request);
     const where = { repository: repositoryAccess(user.id) };
     const [deployments, counts] = await Promise.all([db.deployment.findMany({ where, orderBy: { createdAt: "desc" }, take: 10, include: { environment: true, repository: true, stages: true } }), db.deployment.groupBy({ by: ["status"], where, _count: true })]);
-    return { deployments, counts };
+    return { deployments: deployments.map(({ secretSnapshot: _sealed, ...safe }) => safe), counts };
   }
 
   @Get("/v1/deployments/:deploymentId/logs")
@@ -270,10 +270,11 @@ export class AppController {
     if (!config || !environment || !worker) throw new BadRequestException("Deployment target is no longer available");
     validateProfile(config.profile);
     if (!/^[a-f0-9]{40}$/i.test(previous.commitSha)) throw new BadRequestException("Legacy deployment has no immutable SHA; create a new deployment");
+    if (previous.reuseImageId && !(worker.capabilities as { runtimeManagement?: boolean })?.runtimeManagement) throw new BadRequestException("Update this worker before retrying an immutable rollback");
     const policy = assertEnvironmentTarget(environment.policy, previous.sourceBranch, worker.id);
     const secretSnapshot = await snapshotSecrets(environment.id, (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
     if (secretSnapshot.length && !(worker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) throw new BadRequestException("Update this worker to version 1.2 before deploying secrets");
-    const deployment = await db.deployment.create({ data: { secretSnapshot, repositoryId: previous.repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: previous.commitSha, sourceBranch: previous.sourceBranch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.RETRY, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
+    const deployment = await db.deployment.create({ data: { secretSnapshot, releaseKind: previous.releaseKind, sourceDeploymentId: previous.sourceDeploymentId, reuseImageId: previous.reuseImageId, previewNumber: previous.previewNumber, repositoryId: previous.repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: previous.commitSha, sourceBranch: previous.sourceBranch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.RETRY, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
     await this.eventForWorker(deployment.id, "deployment.retry", { retriedFrom: deploymentId });
     return { id: deployment.id, status: deployment.status, commitSha: deployment.commitSha, retriedFrom: deploymentId };
   }
