@@ -16,7 +16,9 @@ try {
   const file = join(root, '.env.operations');
   let existing = {};
   try { existing = dotenv.parse(await readFile(file)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const values = { OPERATIONS_ALERT_TOKEN: existing.OPERATIONS_ALERT_TOKEN ?? randomBytes(32).toString('base64url'), OPERATIONS_ALERT_EMAIL: users[0].email, OPERATIONS_WORKER_ID: 'ba422329-cfce-4a3d-a927-9af551742b8b' };
+  const worker = dotenv.parse(await readFile(join(root, '.env.worker')));
+  if (!worker.WORKER_ID) throw new Error('Installed worker configuration required');
+  const values = { OPERATIONS_ALERT_TOKEN: existing.OPERATIONS_ALERT_TOKEN ?? randomBytes(32).toString('base64url'), OPERATIONS_ALERT_EMAIL: users[0].email, OPERATIONS_WORKER_ID: worker.WORKER_ID };
   await writeFile(file, Object.entries(values).map(([k, v]) => `${k}=${v}`).join('\n') + '\n', { mode: 0o600 });
   if (process.platform === 'win32') execFileSync('icacls', [file, '/inheritance:r', '/grant:r', `${process.env.USERDOMAIN}\\${process.env.USERNAME}:F`], { stdio: 'ignore' });
   console.log('Private operator configuration prepared; no credentials displayed.');
