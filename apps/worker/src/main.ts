@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config({ path: new URL("../../../.env", import.meta.url) });
 import { setTimeout as delay } from "node:timers/promises";
+import { RuntimeMonitor } from "./runtime-monitor.js";
 import { DeploymentExecutor } from "./deployment-executor.js";
 import { sendHeartbeat } from "./heartbeat.js";
 import { WorkerApi } from "./worker-api.js";
@@ -9,7 +10,7 @@ import { runProcess } from "./process-runner.js";
 const apiUrl = process.env.WORKER_API_URL ?? "http://localhost:4000";
 const workerId = process.env.WORKER_ID;
 const workerToken = process.env.WORKER_TOKEN;
-const version = process.env.WORKER_VERSION ?? "1.1.0";
+const version = process.env.WORKER_VERSION ?? "1.2.0";
 if (!workerId || !workerToken) throw new Error("WORKER_ID and WORKER_TOKEN are required");
 const endpoint = new URL(apiUrl);
 if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname))) throw new Error("Remote workers require an HTTPS API URL");
@@ -21,6 +22,7 @@ process.once("SIGINT", () => abort.abort());
 process.once("SIGTERM", () => abort.abort());
 const api = new WorkerApi(apiUrl, workerId, workerToken);
 const executor = new DeploymentExecutor();
+const monitor = new RuntimeMonitor();
 let heartbeating = false;
 async function heartbeat() {
   if (heartbeating) return;
@@ -30,6 +32,7 @@ async function heartbeat() {
   finally { heartbeating = false; }
 }
 await heartbeat();
+const runtimeTimer = setInterval(() => void monitor.tick(api).catch(() => console.error("[worker] runtime monitoring unavailable")), 15000);
 const heartbeatTimer = setInterval(() => void heartbeat(), 30000);
 console.log("[worker] ready; polling control plane for jobs");
 try {
@@ -40,4 +43,4 @@ try {
     } catch (error) { console.error("[worker] poll failed", error instanceof Error ? error.message : "error"); }
     await delay(5000, undefined, { signal: abort.signal }).catch(() => undefined);
   }
-} finally { clearInterval(heartbeatTimer); }
+} finally { clearInterval(heartbeatTimer); clearInterval(runtimeTimer); }

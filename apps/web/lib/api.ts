@@ -19,3 +19,15 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   }
   return response.json() as Promise<T>;
 }
+
+export async function githubProviderToken() {
+  const client = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+  const { data } = await client.auth.getSession();
+  if (!data.session?.provider_token) throw new Error("Authorize organization access again to synchronize an organization installation.");
+  return data.session.provider_token;
+}
+export async function authorizeOrganizations() {
+  const client = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+  const { error } = await client.auth.signInWithOAuth({ provider: "github", options: { scopes: "read:org", redirectTo: window.location.origin + "/auth/callback" } });
+  if (error) throw new Error(error.message);
+}

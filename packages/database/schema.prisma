@@ -48,6 +48,9 @@ model GitHubInstallation {
   userId         String
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   installationId String   @unique
+  teamId String?
+  suspendedAt DateTime?
+  revokedAt DateTime?
   accountLogin   String
   createdAt      DateTime @default(now())
   repositories   Repository[]
@@ -64,6 +67,8 @@ model Repository {
   installation    GitHubInstallation? @relation(fields: [installationId], references: [id], onDelete: SetNull)
   githubRepoId    String   @unique
   fullName        String
+  archivedAt DateTime?
+  previewEnabled Boolean @default(false)
   defaultBranch   String
   createdAt       DateTime @default(now())
   environments    Environment[]
@@ -108,6 +113,11 @@ model Deployment {
   approvalStatus String @default("NOT_REQUIRED")
   approvedById   String?
   approvedAt     DateTime?
+  secretSnapshot Json?
+  reuseImageId String?
+  releaseKind String @default("DEPLOY")
+  sourceDeploymentId String?
+  previewNumber Int?
   commitSha      String
   trigger        DeploymentTrigger
   status         DeploymentStatus @default(QUEUED)
@@ -122,6 +132,7 @@ model Deployment {
   events         DeploymentEvent[]
   diagnosis     AIDiagnosis?
   effects       DeploymentEffect[]
+  runtime DeploymentRuntime?
   @@index([repositoryId, createdAt])
   @@index([targetWorkerId, status, createdAt], map: "Deployment_worker_queue_idx")
 }
@@ -229,6 +240,8 @@ enum TeamRole {
 model Team {
   id String @id @default(uuid())
   name String
+  archivedAt DateTime?
+  ownerTransferToId String?
   createdAt DateTime @default(now())
   members TeamMember[]
   invites TeamInvite[]
@@ -269,4 +282,32 @@ model TeamAudit {
   subject String
   createdAt DateTime @default(now())
   @@index([teamId, createdAt])
+}
+
+model DeploymentRuntime {
+  id String @id @default(uuid())
+  deploymentId String @unique
+  deployment Deployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+  workerId String
+  endpoint String?
+  imageId String?
+  state String @default("UNKNOWN")
+  observedAt DateTime?
+  desiredState String @default("RUNNING")
+  commands RuntimeCommand[]
+  @@index([workerId, observedAt])
+}
+
+model RuntimeCommand {
+  id String @id @default(uuid())
+  runtimeId String
+  runtime DeploymentRuntime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+  action String
+  status String @default("PENDING")
+  actorId String
+  attempts Int @default(0)
+  createdAt DateTime @default(now())
+  startedAt DateTime?
+  endedAt DateTime?
+  @@index([status, createdAt])
 }

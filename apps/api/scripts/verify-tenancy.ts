@@ -33,8 +33,21 @@ try {
     await tx.teamMember.create({ data: { teamId: team.id, userId: developer.id, role: "ADMIN" } });
     assert.equal((await approve(developer.id)).count, 1, "second administrator approval");
     assert.equal((await approve(developer.id)).count, 0, "approval cannot replay");
+    await tx.team.update({where:{id:team.id},data:{ownerTransferToId:developer.id}});
+    await tx.teamMember.updateMany({where:{teamId:team.id,role:"OWNER"},data:{role:"ADMIN"}});
+    await tx.teamMember.update({where:{teamId_userId:{teamId:team.id,userId:developer.id}},data:{role:"OWNER"}});
+    assert.equal(await tx.teamMember.count({where:{teamId:team.id,role:"OWNER"}}),1,"transfer preserves one owner");
+    await tx.team.update({where:{id:team.id},data:{archivedAt:new Date()}});
+    assert.equal(await tx.repository.count({where:{id:repo.id,...repositoryAccess(developer.id)}}),0,"archived team denies access");
+    await tx.team.update({where:{id:team.id},data:{archivedAt:null}});
+    await tx.repository.update({where:{id:repo.id},data:{archivedAt:new Date()}});
+    assert.equal(await tx.repository.count({where:{id:repo.id,...repositoryAccess(developer.id)}}),0,"archived repository denies access");
+    assert.equal(await tx.repository.count({where:{id:repo.id,...repositoryAccess(developer.id,"admin",true)}}),1,"administrator can find archived repository to restore");
+    const runtime = await tx.deploymentRuntime.create({data:{deploymentId:deployment.id,workerId:"fixture-worker",state:"STOPPED"}});
+    const command = await tx.runtimeCommand.create({data:{runtimeId:runtime.id,action:"START",actorId:developer.id,status:"RUNNING",attempts:2}});
+    assert.equal((await tx.runtimeCommand.updateMany({where:{id:command.id,status:"RUNNING",attempts:1},data:{status:"SUCCEEDED"}})).count,0,"stale command attempt cannot complete fresh lease");
     throw rollback;
   }, { maxWait: 10000, timeout: 60000 });
 } catch (error) { if (error !== rollback) throw error; }
 finally { await db.$disconnect(); }
-console.log("PASS: PostgreSQL tenant role matrix, removed membership, approval isolation and replay; all fixtures rolled back.");
+console.log("PASS: PostgreSQL tenant role matrix, removed membership, approval isolation, ownership transfer, archival isolation and runtime command leases; all fixtures rolled back.");

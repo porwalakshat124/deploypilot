@@ -14,7 +14,7 @@ export function validateProfile(value: unknown): Record<string, unknown> {
   if (!Number.isInteger(p.port) || Number(p.port) < 1 || Number(p.port) > 65535) throw new BadRequestException("Container port must be 1–65535");
   if (typeof p.healthcheckPath !== "string" || !/^\/(?!\/)[^\s\\]*$/.test(p.healthcheckPath)) throw new BadRequestException("HTTP health check requires an absolute path");
   if (p.command !== undefined && (!Array.isArray(p.command) || p.command.length > 32 || p.command.some(v => typeof v !== "string" || v.includes("\0") || v.length > 1000))) throw new BadRequestException("Command must be an array of arguments");
-  if (p.requiredSecretNames !== undefined && (!Array.isArray(p.requiredSecretNames) || p.requiredSecretNames.length)) throw new BadRequestException("Runtime secret injection is not configured yet");
+  if (p.requiredSecretNames !== undefined && (!Array.isArray(p.requiredSecretNames) || p.requiredSecretNames.length > 50 || p.requiredSecretNames.some(name => typeof name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(name)))) throw new BadRequestException("Required secret names must be valid environment variable names (maximum 50)");
   if (p.buildArgs !== undefined && (!p.buildArgs || typeof p.buildArgs !== "object" || Array.isArray(p.buildArgs) || Object.keys(p.buildArgs).length > 32 || Object.entries(p.buildArgs).some(([key, value]) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || /secret|token|password|key/i.test(key) || typeof value !== "string" || value.length > 2000 || value.includes("\0")))) throw new BadRequestException("Build arguments must be non-secret string values with valid names");
-  return { ...p, requiredSecretNames: [] };
+  return { ...p, requiredSecretNames: [...new Set((p.requiredSecretNames ?? []) as string[])] };
 }

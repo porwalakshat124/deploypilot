@@ -18,7 +18,7 @@ In Dashboard > Workers, select the repository and register a worker. Store only 
     WORKER_API_URL=https://your-api.example.com
     WORKER_ID=the-registered-worker-id
     WORKER_TOKEN=the-one-time-token
-    WORKER_VERSION=0.2.0
+    WORKER_VERSION=1.2.0
     WORKER_BUILD_NETWORK=bridge
 
 Do not copy the API server's environment file to the worker. The remote agent does not need database, Redis, GitHub App, Supabase service, or OpenAI keys. HTTP is accepted only for a loopback API address. Keep worker credentials out of command history and source control.

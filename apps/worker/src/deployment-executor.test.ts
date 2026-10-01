@@ -5,10 +5,10 @@ import type { WorkerApi } from "./worker-api.js";
 const job = { deploymentId: "f4c843df-fb99-4f77-a49a-0945ad0c9f05", commitSha: "a".repeat(40), profile: { strategy: "DOCKERFILE" as const, timeoutSeconds: 60, port: 3000, healthcheckPath: "/", requiredSecretNames: [] } };
 function fixture() {
   const api = { log: vi.fn().mockResolvedValue({}), logs: vi.fn().mockResolvedValue({}), stage: vi.fn().mockResolvedValue({}), complete: vi.fn().mockResolvedValue({}), status: vi.fn().mockResolvedValue({ status: "RUNNING" }), downloadSource: vi.fn().mockResolvedValue(Buffer.from("archive")) };
-  const docker = { build: vi.fn().mockResolvedValue({}), start: vi.fn().mockResolvedValue({}), health: vi.fn().mockResolvedValue("http://127.0.0.1:1234"), logs: vi.fn().mockResolvedValue({}), cleanup: vi.fn().mockResolvedValue(undefined) };
+  const docker = { imageId: vi.fn().mockResolvedValue("sha256:"+"b".repeat(64)), build: vi.fn().mockResolvedValue({}), start: vi.fn().mockResolvedValue({}), health: vi.fn().mockResolvedValue("http://127.0.0.1:1234"), logs: vi.fn().mockResolvedValue({}), cleanup: vi.fn().mockResolvedValue(undefined) };
   const source = vi.fn(async (_: Buffer, run: (path: string) => Promise<void>) => run("checkout"));
   const executor = new DeploymentExecutor(docker as unknown as DockerAdapter, source);
-  return { api, docker, source, run: () => executor.execute(job, api as unknown as WorkerApi) };
+  return { api, docker, source, executor, run: () => executor.execute(job, api as unknown as WorkerApi) };
 }
 describe("remote execution", () => {
   it("delivers verbose Docker output in bounded ordered batches before completion", async () => {
@@ -24,7 +24,7 @@ describe("remote execution", () => {
     const f = fixture(); expect(await f.run()).toEqual({ status: "SUCCEEDED" });
     expect(f.docker.start).toHaveBeenCalledOnce(); expect(f.docker.health).toHaveBeenCalledOnce();
     expect(f.api.stage).toHaveBeenCalledWith(job.deploymentId, "tests", "SKIPPED", expect.any(String));
-    expect(f.api.complete).toHaveBeenCalledWith(job.deploymentId, "SUCCEEDED", expect.any(String));
+    expect(f.api.complete).toHaveBeenCalledWith(job.deploymentId, "SUCCEEDED", expect.any(String), "http://127.0.0.1:1234", "sha256:"+"b".repeat(64));
     expect(f.docker.cleanup).not.toHaveBeenCalled();
   });
   it("records the failed build stage and never runs health after a build error", async () => {
@@ -58,6 +58,13 @@ describe("remote execution", () => {
     const f = fixture(); f.docker.build.mockRejectedValue(new Error("Execution timed out"));
     expect(await f.run()).toEqual({ status: "TIMED_OUT" });
     expect(f.api.complete).toHaveBeenCalledWith(job.deploymentId, "TIMED_OUT", expect.any(String));
+  });
+  it("rolls back with the recorded image without downloading or rebuilding source", async () => {
+    const f = fixture(), imageId = "sha256:"+"c".repeat(64);
+    expect(await f.executor.execute({...job,reuseImageId:imageId}, f.api as unknown as WorkerApi)).toEqual({status:"SUCCEEDED"});
+    expect(f.api.downloadSource).not.toHaveBeenCalled();
+    expect(f.docker.build).not.toHaveBeenCalled();
+    expect(f.docker.start.mock.calls[0][0]).toBe(imageId);
   });
   it("guards duplicate in-process execution", async () => {
     const f = fixture(); const first = f.run();

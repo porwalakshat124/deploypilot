@@ -12,6 +12,16 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 function json(value: unknown, headers?: Record<string, string>) { return new Response(JSON.stringify(value), { headers }); }
 function commit() { fetchMock.mockResolvedValueOnce(json({ sha: "a".repeat(40), commit: { tree: { sha: "b".repeat(40) } } })); }
 describe("GitHub source discovery", () => {
+  it("connects organizations only after verifying GitHub identity and active owner membership",async()=>{
+    fetchMock.mockResolvedValueOnce(json({account:{id:10,type:"Organization",login:"org"}})).mockResolvedValueOnce(json({id:99})).mockResolvedValueOnce(json({role:"admin",state:"active"}));
+    expect(await github.assertInstallationOwner("42","99","provider-token")).toEqual({organization:true,accountLogin:"org"});
+    expect(fetchMock.mock.calls[2][0]).toBe("https://api.github.com/user/memberships/orgs/org");
+  });
+  it("rejects a provider token belonging to a different signed-in identity",async()=>{
+    fetchMock.mockResolvedValueOnce(json({account:{id:10,type:"Organization",login:"org"}})).mockResolvedValueOnce(json({id:101}));
+    await expect(github.assertInstallationOwner("42","99","provider-token")).rejects.toThrow("match");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
   it("paginates branches and returns names, commits and protection", async () => {
     fetchMock.mockResolvedValueOnce(json([{ name: "feature/docker", commit: { sha: "a".repeat(40) }, protected: true }], { link: '<https://api.github.com/repos/owner/repo/branches?page=3>; rel="next"' }));
     expect(await github.listBranches("42", "owner/repo", 2)).toEqual({ branches: [{ name: "feature/docker", sha: "a".repeat(40), protected: true }], nextPage: 3 });

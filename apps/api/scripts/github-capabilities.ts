@@ -1,0 +1,11 @@
+import dotenv from "dotenv";
+import { createAppAuth } from "@octokit/auth-app";
+import { readFileSync } from "node:fs";
+dotenv.config({ path: new URL("../../../.env", import.meta.url), quiet: true });
+const privateKey = process.env.GITHUB_PRIVATE_KEY?.replace(/\\n/g, "\n") ?? readFileSync(process.env.GITHUB_PRIVATE_KEY_PATH!, "utf8");
+const auth = createAppAuth({ appId: process.env.GITHUB_APP_ID!, privateKey });
+const jwt = await auth({type:"app"});
+const response = await fetch("https://api.github.com/app", {headers:{Authorization:"Bearer "+jwt.token,Accept:"application/vnd.github+json"}});
+if (!response.ok) throw new Error("GitHub capability check failed: HTTP "+response.status);
+const app = await response.json() as {slug:string;events:string[];permissions:Record<string,string>};
+console.log(JSON.stringify({slug:app.slug,events:app.events,permissions:app.permissions}));

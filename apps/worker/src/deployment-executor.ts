@@ -17,7 +17,9 @@ export class DeploymentExecutor {
     let logs = Promise.resolve();
     const pendingLogs: { stage: string; level: string; message: string }[] = [];
     let drainingLogs = false;
+    const containsSecrets = Object.keys(job.runtimeEnvironment ?? {}).length > 0;
     const output = (line: string) => {
+      if (containsSecrets && stage !== "docker-build") return;
       if (pendingLogs.length >= 500) { abort.abort(new Error("Log delivery cannot keep up with build output")); return; }
       pendingLogs.push({ stage, level: "info", message: line.slice(0, 8000) });
       if (drainingLogs) return;
@@ -46,14 +48,19 @@ export class DeploymentExecutor {
       await api.log(job.deploymentId, "system", "info", "Worker claimed immutable commit " + job.commitSha);
       for (const skipped of ["dependencies", "tests"]) await api.stage(job.deploymentId, skipped, "SKIPPED", "Declare this step in the repository Dockerfile");
       await api.stage(job.deploymentId, stage, "RUNNING", "Downloading source and building Docker image");
-      const archive = await api.downloadSource(job.deploymentId, abort.signal);
-      await this.source(archive, async workspace => { await this.docker.build(name, workspace, job.profile, policy, options); }, abort.signal);
+      if (job.reuseImageId) {
+        if (!/^sha256:[a-f0-9]{64}$/.test(job.reuseImageId)) throw new Error("Invalid rollback image");
+        await api.log(job.deploymentId, stage, "info", "Reusing the immutable image from the selected successful deployment");
+      } else {
+        const archive = await api.downloadSource(job.deploymentId, abort.signal);
+        await this.source(archive, async workspace => { await this.docker.build(name, workspace, job.profile, policy, options); }, abort.signal);
+      }
       await logs;
       abort.signal.throwIfAborted();
       await api.stage(job.deploymentId, stage, "SUCCEEDED");
       stage = "health-check";
       await api.stage(job.deploymentId, stage, "RUNNING", "Starting a restricted container and checking HTTP readiness");
-      await this.docker.start(name, name, job.profile, policy, options);
+      await this.docker.start(job.reuseImageId ?? name, name, job.profile, policy, options, job.runtimeEnvironment);
       const endpoint = await this.docker.health(name, job.profile, options);
       await this.docker.logs(name, output);
       await logs;
@@ -65,8 +72,9 @@ export class DeploymentExecutor {
       await api.stage(job.deploymentId, stage, "SUCCEEDED");
       await check();
       abort.signal.throwIfAborted();
+      const imageId = await this.docker.imageId(name);
       finalizing = true;
-      await api.complete(job.deploymentId, "SUCCEEDED", "Container started and HTTP health check passed");
+      await api.complete(job.deploymentId, "SUCCEEDED", "Container started and HTTP health check passed", endpoint, imageId);
       committed = true;
       return { status: "SUCCEEDED" };
     } catch (error) {

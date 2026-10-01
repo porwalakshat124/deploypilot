@@ -4,6 +4,13 @@ dotenv.config({ path: new URL("../../../.env", import.meta.url) });
 import { BadRequestException, Body, Controller, Get, Inject, Injectable, Module, NotFoundException, Param, Post, Req, Res, Sse, UnauthorizedException, ForbiddenException, Patch, Delete } from "@nestjs/common";
 import { AuthService } from "./auth.service.js";
 export { AuthService } from "./auth.service.js";
+import { RepositoryLifecycleController } from "./repository-lifecycle.controller.js";
+import { githubPreview, type PreviewPayload } from "./github-previews.js";
+import { githubLifecycle, type LifecyclePayload } from "./github-lifecycle.js";
+import { ReleasesController } from "./releases.controller.js";
+import { RuntimeController } from "./runtime.controller.js";
+import { SecretsController } from "./secrets.controller.js";
+import { snapshotSecrets, runtimeEnvironment } from "./environment-secrets.js";
 import { OperationsController } from "./operations.controller.js";
 import { TeamsController } from "./teams.controller.js";
 import { repositoryAccess } from "./access.js";
@@ -72,12 +79,20 @@ export class AppController {
   @Get("/v1/github/installations/:installationId/repositories")
   async repositories(@Req() request: Request, @Param("installationId") installationId: string) {
     const user = await this.auth.user(request);
-    await this.github.assertInstallationOwner(installationId, await this.auth.githubId(request));
+    const teamId = typeof request.query.teamId === "string" ? request.query.teamId : undefined;
+    const account = await this.github.assertInstallationOwner(installationId, await this.auth.githubId(request), typeof request.headers["x-github-token"] === "string" ? request.headers["x-github-token"] : undefined);
+    if (account.organization && !teamId) throw new BadRequestException("Choose a team for the organization installation");
+    if (teamId && !await db.teamMember.findFirst({ where: { teamId, userId: user.id, role: { in: ["OWNER", "ADMIN"] }, team: { archivedAt: null } } })) throw new ForbiddenException("Team administrator access is required");
     const existingInstallation = await db.gitHubInstallation.findUnique({ where: { installationId } });
-    if (existingInstallation && existingInstallation.userId !== user.id) throw new ForbiddenException("Installation belongs to another account");
+    if (existingInstallation && (existingInstallation.teamId ? existingInstallation.teamId !== teamId : existingInstallation.userId !== user.id)) throw new ForbiddenException("Installation is connected to another account or team");
     const githubRepositories = await this.github.listRepositories(installationId);
-    const installation = await db.gitHubInstallation.upsert({ where: { installationId }, update: { accountLogin: githubRepositories[0]?.full_name.split("/")[0] ?? "unknown" }, create: { userId: user.id, installationId, accountLogin: githubRepositories[0]?.full_name.split("/")[0] ?? "unknown" } });
-    for (const repo of githubRepositories) await db.repository.upsert({ where: { githubRepoId: String(repo.id) }, update: { fullName: repo.full_name, defaultBranch: repo.default_branch, ownerId: user.id, installationId: installation.id }, create: { githubRepoId: String(repo.id), fullName: repo.full_name, defaultBranch: repo.default_branch, ownerId: user.id, installationId: installation.id } });
+    const installation = await db.gitHubInstallation.upsert({ where: { installationId }, update: { accountLogin: account.accountLogin, revokedAt: null, suspendedAt: null }, create: { userId: user.id, teamId: account.organization ? teamId : null, installationId, accountLogin: account.accountLogin } });
+    for (const repo of githubRepositories) {
+      const existing = await db.repository.findUnique({ where: { githubRepoId: String(repo.id) } });
+      if (existing && existing.installationId !== installation.id) throw new ForbiddenException("Repository is already connected through another installation");
+      await db.repository.upsert({ where: { githubRepoId: String(repo.id) }, update: { fullName: repo.full_name, defaultBranch: repo.default_branch }, create: { githubRepoId: String(repo.id), fullName: repo.full_name, defaultBranch: repo.default_branch, ownerId: user.id, teamId: account.organization ? teamId : null, installationId: installation.id } });
+    }
+    await db.repository.updateMany({ where: { installationId: installation.id, githubRepoId: { notIn: githubRepositories.map(repo => String(repo.id)) } }, data: { archivedAt: new Date() } });
     return { repositories: await db.repository.findMany({ where: repositoryAccess(user.id), orderBy: { fullName: "asc" } }) };
   }
 
@@ -93,7 +108,7 @@ export class AppController {
     const user = await this.auth.user(request);
     const repository = await db.repository.findFirst({ where: { id: repositoryId, ...repositoryAccess(user.id) }, include: { installation: true } });
     if (!repository) throw new NotFoundException("Repository not found");
-    if (!repository.installation) throw new BadRequestException("Repository has no GitHub installation");
+    if (!repository.installation || repository.installation.revokedAt || repository.installation.suspendedAt) throw new BadRequestException("GitHub installation is unavailable");
     return repository;
   }
 
@@ -157,7 +172,9 @@ export class AppController {
     const policy = assertEnvironmentTarget(environment.policy, branch, body.workerId);
     const commitSha = await this.github.resolveCommit(repository.installation.installationId, repository.fullName, body.sha ?? branch);
     if (body.sha && policy.allowedBranches.length && commitSha !== await this.github.resolveCommit(repository.installation.installationId, repository.fullName, branch)) throw new BadRequestException("Restricted environments require the current allowed branch head");
-    const deployment = await db.deployment.create({ data: { repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: body.workerId, commitSha, sourceBranch: branch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.MANUAL, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
+    const secretSnapshot = await snapshotSecrets(environment.id, (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
+    if (secretSnapshot.length && !(repository.workers.find(w => w.id === body.workerId)?.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) throw new BadRequestException("Update this worker to version 1.2 before deploying secrets");
+    const deployment = await db.deployment.create({ data: { secretSnapshot, repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: body.workerId, commitSha, sourceBranch: branch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.MANUAL, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
     // Durable database polling is the remote worker queue; no public Redis credentials are needed.
     return { id: deployment.id, status: deployment.status, commitSha: deployment.commitSha };
   }
@@ -180,10 +197,11 @@ export class AppController {
   @Get("/v1/deployments/:deploymentId")
   async deployment(@Req() request: Request, @Param("deploymentId") deploymentId: string) {
     const user = await this.auth.user(request);
-    const result = await db.deployment.findFirst({ where: { id: deploymentId, repository: repositoryAccess(user.id) }, include: { stages: true, repository: true, config: true, environment: true, diagnosis: true, events: { orderBy: { sequence: "desc" }, take: 50 } } });
+    const result = await db.deployment.findFirst({ where: { id: deploymentId, repository: repositoryAccess(user.id) }, include: { stages: true, repository: true, config: true, environment: true, diagnosis: true, runtime: { include: { commands: { orderBy: { createdAt: "desc" }, take: 10 } } }, events: { orderBy: { sequence: "desc" }, take: 50 } } });
     if (!result) throw new NotFoundException("Deployment not found");
     const canApprove = result.approvalStatus === "PENDING" && result.requestedById !== user.id && Boolean(await db.repository.findFirst({ where: { id: result.repositoryId, ...repositoryAccess(user.id, "admin") }, select: { id: true } }));
-    return { ...result, canApprove, diagnosisEnabled: process.env.AI_DIAGNOSIS_ENABLED !== "false" && Boolean(process.env.OPENAI_API_KEY) };
+    const { secretSnapshot: _sealed, ...safeResult } = result;
+    return { ...safeResult, canApprove, diagnosisEnabled: process.env.AI_DIAGNOSIS_ENABLED !== "false" && Boolean(process.env.OPENAI_API_KEY) };
   }
 
   @Get("/v1/overview")
@@ -253,7 +271,9 @@ export class AppController {
     validateProfile(config.profile);
     if (!/^[a-f0-9]{40}$/i.test(previous.commitSha)) throw new BadRequestException("Legacy deployment has no immutable SHA; create a new deployment");
     const policy = assertEnvironmentTarget(environment.policy, previous.sourceBranch, worker.id);
-    const deployment = await db.deployment.create({ data: { repositoryId: previous.repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: previous.commitSha, sourceBranch: previous.sourceBranch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.RETRY, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
+    const secretSnapshot = await snapshotSecrets(environment.id, (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
+    if (secretSnapshot.length && !(worker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) throw new BadRequestException("Update this worker to version 1.2 before deploying secrets");
+    const deployment = await db.deployment.create({ data: { secretSnapshot, repositoryId: previous.repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: previous.commitSha, sourceBranch: previous.sourceBranch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.RETRY, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
     await this.eventForWorker(deployment.id, "deployment.retry", { retriedFrom: deploymentId });
     return { id: deployment.id, status: deployment.status, commitSha: deployment.commitSha, retriedFrom: deploymentId };
   }
@@ -297,14 +317,24 @@ export class AppController {
     const rawBody = (request as Request & { rawBody?: Buffer }).rawBody;
     if (!rawBody || !verifyGitHubSignature(rawBody, request.headers["x-hub-signature-256"] as string | undefined, process.env.GITHUB_WEBHOOK_SECRET)) throw new UnauthorizedException("Invalid GitHub webhook signature");
     const deliveryId = request.headers["x-github-delivery"] as string | undefined;
-    if (request.headers["x-github-event"] !== "push") return { accepted: true, ignored: true };
+    if (request.headers["x-github-event"] !== "push") {
+      const event = String(request.headers["x-github-event"] ?? "");
+      if (!deliveryId) throw new BadRequestException("GitHub delivery ID is required");
+      return db.$transaction(async tx => {
+        const inserted = await tx.webhookDelivery.createMany({ data: [{ deliveryId, event }], skipDuplicates: true });
+        if (!inserted.count) return { accepted: true, duplicate: true };
+        const outcome = event === "pull_request" ? await githubPreview(tx, payload as PreviewPayload) : await githubLifecycle(tx, event, payload as LifecyclePayload);
+        await tx.webhookDelivery.update({ where: { deliveryId }, data: { outcome, processedAt: new Date() } });
+        return { accepted: true, outcome };
+      });
+    }
     if (!deliveryId || !payload.repository?.id || !payload.after) throw new BadRequestException("Invalid GitHub push payload");
     const branch = branchFromRef(payload.ref);
     if (request.headers["x-github-event"] !== "push" || !branch || !/^[a-f0-9]{40}$/i.test(payload.after) || /^0+$/.test(payload.after)) return { accepted: true, ignored: true };
     return db.$transaction(async tx => {
       const inserted = await tx.webhookDelivery.createMany({ data: [{ deliveryId, event: "push" }], skipDuplicates: true });
       if (!inserted.count) return { accepted: true, duplicate: true };
-      const repository = await tx.repository.findFirst({ where: { githubRepoId: String(payload.repository!.id) }, include: { configs: { orderBy: { version: "desc" } }, environments: { orderBy: { name: "asc" } }, workers: { orderBy: { createdAt: "asc" } } } });
+      const repository = await tx.repository.findFirst({ where: { githubRepoId: String(payload.repository!.id) }, include: { configs: { orderBy: { version: "desc" } }, environments: { orderBy: { name: "asc" } }, workers: { orderBy: { createdAt: "asc" } }, team: true } });
       const config = repository?.configs.find(item => item.branchRule === branch) ?? repository?.configs.find(item => item.branchRule === "*");
       const environment = repository?.environments.find(item => item.name.toLowerCase() === "production");
     const worker = repository?.workers.find(item => workerIsActive(item) && item.lastSeenAt && Date.now() - item.lastSeenAt.getTime() < 90000 && (item.capabilities as { apiPolling?: boolean } | null)?.apiPolling);
@@ -318,7 +348,10 @@ export class AppController {
         await tx.webhookDelivery.update({ where: { deliveryId }, data: { processedAt: new Date(), outcome: "ignored-environment-policy" } });
         return { accepted: true, ignored: true, reason: "Environment policy excludes this push target" };
       }
-      const deployment = await tx.deployment.create({ data: { repositoryId: repository.id, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: payload.after!, sourceBranch: branch, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.PUSH, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map(name => ({ name })) } } });
+      if (repository.archivedAt || repository.team?.archivedAt) return { accepted: true, ignored: true };
+      const secretSnapshot = await snapshotSecrets(environment.id, (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
+      if (secretSnapshot.length && !(worker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) return { accepted: true, ignored: true, reason: "Worker requires update for secrets" };
+      const deployment = await tx.deployment.create({ data: { secretSnapshot, repositoryId: repository.id, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: payload.after!, sourceBranch: branch, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.PUSH, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map(name => ({ name })) } } });
       await tx.webhookDelivery.update({ where: { deliveryId }, data: { processedAt: new Date(), outcome: "deployment-created:" + deployment.id } });
       return { accepted: true, deploymentId: deployment.id };
     });
@@ -406,12 +439,12 @@ export class AppController {
   }
 
   @Post("/v1/workers/:workerId/heartbeat")
-  async heartbeat(@Req() request: Request, @Param("workerId") workerId: string, @Body() body: { version?: string; capabilities?: { apiPolling?: boolean } }) {
+  async heartbeat(@Req() request: Request, @Param("workerId") workerId: string, @Body() body: { version?: string; capabilities?: { apiPolling?: boolean; runtimeSecrets?: boolean; runtimeManagement?: boolean } }) {
     const authorization = request.headers.authorization;
     const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
     const worker = await db.worker.findUnique({ where: { id: workerId } });
     if (!worker || !workerIsActive(worker) || !workerTokenMatches(token, worker.tokenHash)) throw new UnauthorizedException();
-    const updated = await db.worker.update({ where: { id: workerId }, data: { lastSeenAt: new Date(), version: String(body.version ?? worker.version).slice(0, 50), ...(body.capabilities?.apiPolling === true ? { capabilities: { docker: true, apiPolling: true, maxConcurrency: 1 } } : {}) } });
+    const updated = await db.worker.update({ where: { id: workerId }, data: { lastSeenAt: new Date(), version: String(body.version ?? worker.version).slice(0, 50), ...(body.capabilities?.apiPolling === true ? { capabilities: { docker: true, apiPolling: true, maxConcurrency: 1, runtimeSecrets: body.capabilities.runtimeSecrets === true, runtimeManagement: body.capabilities.runtimeManagement === true } } : {}) } });
     return { workerId: updated.id, status: "ONLINE", lastSeenAt: updated.lastSeenAt };
   }
 
@@ -435,9 +468,16 @@ export class AppController {
     const candidate = await tx.deployment.findFirst({
       where: { targetWorkerId: workerId, status: DeploymentStatus.QUEUED, approvalStatus: { in: ["NOT_REQUIRED", "APPROVED"] } },
       orderBy: { createdAt: "asc" },
-      include: { config: true, environment: true },
+      include: { config: true, environment: true, repository: { include: { team: true } } },
     });
     if (!candidate) return { job: null };
+    if (candidate.repository.archivedAt || candidate.repository.team?.archivedAt || (candidate.requestedById && !await tx.repository.findFirst({ where: { id: candidate.repositoryId, ...repositoryAccess(candidate.requestedById, "deploy") }, select: { id: true } }))) {
+      await tx.deployment.update({ where: { id: candidate.id }, data: { status: "CANCELLED", endedAt: new Date() } });
+      await tx.deploymentStage.updateMany({ where: { deploymentId: candidate.id }, data: { status: "SKIPPED", endedAt: new Date() } });
+      await tx.deploymentEffect.createMany({ data: ["archive", "email", "github-status"].map(kind => ({ deploymentId: candidate.id, kind })), skipDuplicates: true });
+      await tx.deploymentEvent.create({ data: { deploymentId: candidate.id, type: "deployment.completed", payload: { status: "CANCELLED", reason: "Repository access was withdrawn before execution" } } });
+      return { job: null };
+    }
     try { assertEnvironmentTarget(candidate.environment?.policy, candidate.sourceBranch, workerId); }
     catch {
       await tx.deployment.update({ where: { id: candidate.id }, data: { status: "CANCELLED", endedAt: new Date() } });
@@ -450,13 +490,15 @@ export class AppController {
       await tx.deployment.update({ where: { id: candidate.id }, data: { approvalStatus: "PENDING" } });
       return { job: null };
     }
+    const environment = runtimeEnvironment(candidate.secretSnapshot);
+    if (Object.keys(environment).length && !(currentWorker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) return { job: null };
     const claimed = await tx.deployment.updateMany({
       where: { id: candidate.id, targetWorkerId: workerId, status: DeploymentStatus.QUEUED, approvalStatus: { in: ["NOT_REQUIRED", "APPROVED"] } },
       data: { status: DeploymentStatus.RUNNING, startedAt: new Date() },
     });
     if (claimed.count !== 1) return { job: null };
     await tx.deploymentEvent.create({ data: { deploymentId: candidate.id, type: "deployment.status", payload: { deploymentId: candidate.id, status: "RUNNING" } } });
-    return { job: { deploymentId: candidate.id, commitSha: candidate.commitSha, profile: candidate.config.profile } };
+    return { job: { deploymentId: candidate.id, commitSha: candidate.commitSha, profile: candidate.config.profile, runtimeEnvironment: environment, reuseImageId: candidate.reuseImageId } };
     });
   }
 
@@ -526,10 +568,10 @@ export class AppController {
   }
 
   @Post("/v1/workers/:workerId/deployments/:deploymentId/complete")
-  async completeWorkerDeployment(@Req() request: Request, @Param("workerId") workerId: string, @Param("deploymentId") deploymentId: string, @Body() body: { status?: "SUCCEEDED" | "FAILED" | "TIMED_OUT"; message?: string }) {
+  async completeWorkerDeployment(@Req() request: Request, @Param("workerId") workerId: string, @Param("deploymentId") deploymentId: string, @Body() body: { status?: "SUCCEEDED" | "FAILED" | "TIMED_OUT"; message?: string; endpoint?: string; imageId?: string }) {
     await this.authenticatedWorker(request, workerId);
     const status = body.status ?? DeploymentStatus.FAILED;
-    return finishDeployment(deploymentId, workerId, status, body.message ?? "Deployment " + status.toLowerCase());
+    return finishDeployment(deploymentId, workerId, status, body.message ?? "Deployment " + status.toLowerCase(), body.endpoint, body.imageId);
   }
   private logForWorker(deploymentId: string, stage: string, level: string, message: string) {
     return appendLog(deploymentId, stage, level, message);
@@ -543,5 +585,5 @@ export class AppController {
   }
 }
 
-@Module({ controllers: [AppController, TeamsController, OperationsController], providers: [AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
+@Module({ controllers: [RepositoryLifecycleController, AppController, TeamsController, OperationsController, SecretsController, RuntimeController, ReleasesController], providers: [AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
 export class AppModule {}
