@@ -59,7 +59,7 @@ recovery plan. A public-schema restore is not a full Supabase project restore.
 5. Choose/activate archival expiry and Docker rollback-image retention only after
    recovery requirements are agreed. Current preview mode erases nothing.
 6. Larger authenticated user load/soak testing, region/capacity review, host egress
-   policy and independent security review. A 30-request read-only check is limited
+   policy and independent security review. A 120-request read-only check is limited
    evidence, not a scale claim. AI remains disabled by the owner's decision.
 
 The launch gate remains closed until these requirements are evidenced and the

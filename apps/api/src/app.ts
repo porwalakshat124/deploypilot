@@ -32,6 +32,7 @@ import { appendLog, appendLogs, finishDeployment } from "./execution-state.js";
 import { r2 } from "./r2.service.js";
 import { NotificationsService } from "./notifications.service.js";
 import { DeploymentEffectsService } from "./deployment-effects.service.js";
+import { LogRetentionService } from "./log-retention.js";
 
 @Controller()
 export class AppController {
@@ -68,6 +69,7 @@ export class AppController {
     if (!r2.configured()) throw new BadRequestException("R2 storage is not configured on the API");
     const logs = await db.deploymentLog.findMany({ where: { deploymentId }, orderBy: { sequence: "asc" }, take: 50001 });
     if (logs.length > 50000) throw new BadRequestException("Archive limit exceeded; use paginated export");
+    if (!logs.length && await db.deploymentEvent.findFirst({ where: { deploymentId, type: "logs.retained" } })) return { downloadUrl: await r2.signedLogUrl(deploymentId), retained: true };
     return { ...await r2.archiveLogs(deploymentId, logs), downloadUrl: await r2.signedLogUrl(deploymentId) };
   }
 
@@ -75,6 +77,12 @@ export class AppController {
   async listRepositories(@Req() request: Request) {
     const user = await this.auth.user(request);
     return { repositories: await db.repository.findMany({ where: repositoryAccess(user.id), orderBy: { fullName: "asc" }, include: { _count: { select: { configs: true, environments: true } }, workers: { where: { revokedAt: null }, select: { id: true, lastSeenAt: true } }, deployments: { orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true } } } }) };
+  }
+
+  @Get("/v1/github/installation")
+  async personalInstallation(@Req() request: Request) {
+    await this.auth.user(request);
+    return this.github.personalInstallation(await this.auth.githubId(request));
   }
 
   @Get("/v1/github/installations/:installationId/repositories")
@@ -587,5 +595,5 @@ export class AppController {
   }
 }
 
-@Module({ controllers: [OperationsAlertController, RepositoryLifecycleController, AppController, TeamsController, OperationsController, SecretsController, RuntimeController, ReleasesController], providers: [OperationsAlerts, AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
+@Module({ controllers: [OperationsAlertController, RepositoryLifecycleController, AppController, TeamsController, OperationsController, SecretsController, RuntimeController, ReleasesController], providers: [LogRetentionService, OperationsAlerts, AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
 export class AppModule {}

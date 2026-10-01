@@ -17,7 +17,11 @@ export class R2Service {
     const key = `deployments/${deploymentId}/logs.jsonl`;
     const body = logs.map((log) => JSON.stringify({ ...log, createdAt: log.createdAt.toISOString() })).join("\n") + (logs.length ? "\n" : "");
     await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: "application/x-ndjson", Metadata: { deploymentId, lineCount: String(logs.length) } }));
-    return { key, lineCount: logs.length };
+    const sha256 = createHash("sha256").update(body).digest("hex");
+    const stored = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    const bytes = await stored.Body?.transformToByteArray();
+    if (!bytes || createHash("sha256").update(bytes).digest("hex") !== sha256) throw new Error("Log archive verification failed");
+    return { key, lineCount: logs.length, sha256, verified: true };
   }
 
   async signedLogUrl(deploymentId: string) {

@@ -6,6 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { pipeline } from 'node:stream/promises';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { retainBackups } from './backup-retention.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(root, 'apps/api/package.json'));
@@ -97,6 +98,7 @@ if (command === 'backup') {
   await writeFile(file + '.json', JSON.stringify(manifest, null, 2), { mode: 0o600 });
   console.log(JSON.stringify({ backup: file, encrypted: true, secretKeyBackedUp: true, scope: manifest.scope }));
   try { await stat(join(root, '.env.operations')); await upload(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  console.log(JSON.stringify({retention:await retainBackups(directory)}));
 } else if (command === 'upload') {
   const file = resolve(process.argv[3] ?? '');
   if (dirname(file) !== directory || !file.endsWith('.dpbackup')) throw new Error('Select a backup in the private backup directory');
