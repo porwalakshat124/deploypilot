@@ -132,8 +132,16 @@ revoked. CI also verifies archival access and ownership/command lease invariants
 
 ## Features still requiring further implementation
 
-Encrypted user-secret delivery into containers; promotion and runtime rollback;
-continuous runtime inventory/health and stop controls; organization GitHub App
-lifecycle management; artifact and log retention; distributed rate limits; backup
-restore drills and external alerting. AI remains disabled at the owner's request.
-These are separate from the verified team authorization and Docker build path.
+Public routing/TLS and traffic switching; artifact and log retention;
+distributed rate limits; backup restore drills and external alerting. Validate
+organization installation and team access with real second-user accounts before
+opening the service broadly. AI remains disabled at the owner's request.
+
+## Database pool tuning
+
+DATABASE_CONNECTION_LIMIT overrides the connection_limit URL parameter without
+changing credentials. It accepts integers 1–20; production currently uses 5.
+The previous single-connection pool exhausted its wait queue during concurrent
+worker and dashboard requests (Prisma P2024). Keep the total across API instances
+within the database/pooler budget when scaling. This setting does not eliminate
+cross-region database latency.
