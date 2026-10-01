@@ -10,7 +10,7 @@ const origins = (configuredOrigins ?? "http://localhost:3000").split(",").map(s 
 if (process.env.NODE_ENV === "production" && (!configuredOrigins || origins.includes("*"))) throw new Error("Production requires explicit CORS_ORIGINS or WEB_ORIGIN");
 const app = await NestFactory.create(AppModule, { bodyParser: false });
 app.enableShutdownHooks();
-app.enableCors({ origin: origins, allowedHeaders: ["Authorization", "Content-Type", "Last-Event-ID"], exposedHeaders: ["X-Request-ID"] });
+app.enableCors({ origin: origins, allowedHeaders: ["Authorization", "Content-Type", "Last-Event-ID", "X-GitHub-Token"], exposedHeaders: ["X-Request-ID"] });
 const buckets = new Map<string, { count: number; reset: number }>();
 app.use((req: Request, res: Response, next: NextFunction) => {
   const requestId = randomUUID();
@@ -20,7 +20,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   const start = Date.now();
   res.on("finish", () => console.log(JSON.stringify({ requestId, method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - start })));
   if (req.path === "/health") return next();
-  const worker = req.path.startsWith("/v1/workers/") && /\/(logs|stages|heartbeat|claim|status|complete|source)(\/|$)/.test(req.path);
+  const worker = req.path.startsWith("/v1/workers/") && /\/(logs|stages|heartbeat|claim|status|complete|source|runtimes|runtime-commands|report)(\/|$)/.test(req.path);
   const key = createHash("sha256").update((req.socket.remoteAddress ?? "") + ":" + (req.headers.authorization ?? "")).digest("hex");
   if (buckets.size > 10000) for (const [id, value] of buckets) if (value.reset < Date.now()) buckets.delete(id);
   if (!buckets.has(key) && buckets.size >= 10000) return res.status(429).json({ message: "Rate limiter capacity reached", requestId });

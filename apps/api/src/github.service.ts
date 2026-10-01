@@ -15,13 +15,23 @@ export class GitHubService {
   private readonly appId = process.env.GITHUB_APP_ID;
   private readonly privateKey = process.env.GITHUB_PRIVATE_KEY?.replace(/\\n/g, "\n") ?? (process.env.GITHUB_PRIVATE_KEY_PATH ? readFileSync(process.env.GITHUB_PRIVATE_KEY_PATH, "utf8") : undefined);
 
-  async assertInstallationOwner(installationId: string, githubUserId: string) {
+  async assertInstallationOwner(installationId: string, githubUserId: string, userToken?: string) {
     if (!/^\d+$/.test(installationId) || !this.appId || !this.privateKey) throw new ForbiddenException("Invalid or unconfigured GitHub installation");
     const auth = createAppAuth({ appId: this.appId, privateKey: this.privateKey });
     const jwt = await auth({ type: "app" });
     const response = await fetch(`https://api.github.com/app/installations/${installationId}`, { headers: { Authorization: `Bearer ${jwt.token}`, Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(15000) });
-    const installation = await response.json() as { account?: { id: number; type: string } };
-    if (!response.ok || installation.account?.type !== "User" || String(installation.account.id) !== githubUserId) throw new ForbiddenException("Only installations owned by your GitHub account can be connected; organization installation authorization is not configured");
+    const installation = await response.json() as { account?: { id: number; type: string; login: string }; suspended_at?: string | null };
+    if (!response.ok || !installation.account || installation.suspended_at) throw new ForbiddenException("GitHub installation is unavailable");
+    if (installation.account.type === "User" && String(installation.account.id) === githubUserId) return { organization: false, accountLogin: installation.account.login };
+    if (installation.account.type !== "Organization" || !userToken || userToken.length > 500) throw new ForbiddenException("Organization installation requires GitHub organization authorization");
+    const headers = { Authorization: "Bearer " + userToken, Accept: "application/vnd.github+json" };
+    const identityResponse = await fetch("https://api.github.com/user", { headers, signal: AbortSignal.timeout(15000) });
+    const identity = await identityResponse.json() as { id?: number };
+    if (!identityResponse.ok || String(identity.id) !== githubUserId) throw new ForbiddenException("GitHub token does not match your signed-in account");
+    const membershipResponse = await fetch("https://api.github.com/user/memberships/orgs/" + encodeURIComponent(installation.account.login), { headers, signal: AbortSignal.timeout(15000) });
+    const membership = await membershipResponse.json() as { role?: string; state?: string };
+    if (!membershipResponse.ok || membership.state !== "active" || membership.role !== "admin") throw new ForbiddenException("An active GitHub organization owner must connect this installation; grant read:org access");
+    return { organization: true, accountLogin: installation.account.login };
   }
 
   private async token(installationId: string) {
@@ -66,12 +76,17 @@ export class GitHubService {
 
   async listRepositories(installationId: string): Promise<GitHubRepository[]> {
     const token = await this.token(installationId);
-    const response = await fetch("https://api.github.com/installation/repositories?per_page=100", {
+    const repositories: GitHubRepository[] = [];
+    for (let page = 1; page <= 100; page++) {
+    const response = await fetch("https://api.github.com/installation/repositories?per_page=100&page=" + page, {
       headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" },
     });
     if (!response.ok) throw new InternalServerErrorException("Unable to read GitHub repositories");
     const body = await response.json() as { repositories: GitHubRepository[] };
-    return body.repositories;
+    repositories.push(...body.repositories);
+    if (!/rel="next"/.test(response.headers.get("link") ?? "")) return repositories;
+    }
+    throw new ServiceUnavailableException("GitHub repository pagination limit exceeded");
   }
 
   async resolveCommit(installationId: string, fullName: string, ref: string) {

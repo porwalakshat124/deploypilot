@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { repositoryAccess } from "./access.js";
 import type { Request } from "express";
 const db = vi.hoisted(() => ({
+  team: { findUnique: vi.fn().mockResolvedValue({id:"team",archivedAt:null}) },
   teamMember: { findUnique: vi.fn(), upsert: vi.fn() },
   teamInvite: { findUnique: vi.fn(), updateMany: vi.fn() },
   teamAudit: { create: vi.fn() },
@@ -18,10 +19,10 @@ beforeEach(() => { vi.clearAllMocks(); db.$transaction.mockImplementation(fn => 
 
 describe("tenant permissions", () => {
   it("never grants personal ownership access to a team repository", () => {
-    expect(repositoryAccess("former-owner").OR?.[0]).toEqual({ teamId: null, ownerId: "former-owner" });
+    expect(repositoryAccess("former-owner").OR?.[0]).toEqual({ teamId: null, ownerId: "former-owner", archivedAt:null });
   });
   it("uses live membership and excludes viewers from deployment mutations", () => {
-    expect(repositoryAccess("u", "deploy").OR?.[1]).toEqual({ team: { members: { some: { userId: "u", role: { in: ["OWNER", "ADMIN", "DEVELOPER"] } } } } });
+    expect(repositoryAccess("u", "deploy").OR?.[1]).toEqual({ archivedAt:null, team: { archivedAt:null, members: { some: { userId: "u", role: { in: ["OWNER", "ADMIN", "DEVELOPER"] } } } } });
     expect(JSON.stringify(repositoryAccess("u", "admin"))).not.toContain("DEVELOPER");
     expect(JSON.stringify(repositoryAccess("u"))).toContain("VIEWER");
   });

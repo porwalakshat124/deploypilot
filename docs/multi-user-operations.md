@@ -14,7 +14,7 @@ Assignment is intentionally one-way in this release.
 Viewers read repository data. Developers also save build profiles, deploy, retry
 and cancel. Administrators manage environments, worker credentials and developer/
 viewer membership. The owner also manages administrators. There is one owner;
-ownership transfer and team deletion are not available yet.
+ownership transfer requires acceptance by an existing administrator. Owners can archive and restore a team after stopping recorded runtimes and finishing builds. Archival revokes workers and invitations and retains history.
 
 Invitation links are issued for a specific verified email, expire after seven days,
 are stored as SHA-256 digests and can be redeemed once. Copy and share the link
@@ -79,6 +79,56 @@ The same rollback test can run with the configured database:
 Do not run ci-roles.sql against Supabase. Do not run Prisma migrate deploy against
 the existing production database until its older Supabase-applied migrations have
 been baselined and a restore-tested backup is available.
+
+## Runtime secrets and releases
+
+Administrators save environment secrets through a write-only form. AES-256-GCM
+encrypts values with environment/name binding and a fresh nonce. The API requires
+ENVIRONMENT_SECRET_KEY (a base64-encoded 32-byte key). Back up this key securely
+alongside encrypted database backups; losing it prevents decryption. Key rotation
+and re-encryption are not implemented in this release.
+
+Build profiles name required runtime secrets. Queuing captures encrypted values;
+updating a secret affects future runs. Worker 1.2 receives values over authenticated
+HTTPS and injects them into Docker through its local socket/Windows named pipe.
+Values are not placed in CLI arguments, build arguments or temporary env files.
+Docker stores runtime environment values in container metadata; the worker host
+operator can inspect them. Use dedicated trusted hosts for each team. Container
+output is suppressed for runs using secrets; API logs also redact known values.
+
+Successful runs record the immutable Docker image ID and a loopback endpoint.
+Runtime health is polled every 15 seconds; stale observations are labelled.
+Developers can queue stop, start and restart commands. Leases retry up to three
+attempts and stale acknowledgments cannot complete a newer lease.
+
+Promotion rebuilds the recorded commit and profile in another environment,
+using its secrets and approvals. Rollback creates a run from a recorded immutable
+image on its original worker. The image must still exist locally. Each release
+starts a separate container; stop previous runs explicitly. There is no public
+ingress, stable traffic switching or shared image registry yet.
+
+## GitHub lifecycle and previews
+
+Organization installation connection requires both a DeployPilot team
+administrator and verified active GitHub organization owner. The GitHub OAuth
+provider token is checked transiently, never stored by the API. Use the
+organization authorization button to grant read:org when connecting.
+
+Installations are bound to their connecting team/account. Sync paginates selected
+repositories and archives repositories whose App access was removed. Repository
+disconnect/restore retains history; restoration rechecks GitHub access and
+requires newly registered workers. Signed lifecycle events handle installation
+suspension/removal and repository removal, rename and transfer.
+
+PR previews are opt-in per repository. They require the App pull_request
+subscription/read permission, a matching branch profile or *, and a 1.2 worker.
+Forks and profiles requiring secrets are excluded. Previews use separate
+Preview PR #N environments and respect their branch/worker/approval policy.
+Closing a PR cancels its active runs and queues stops for its recorded containers.
+Preview endpoints remain worker-local.
+
+Migration 0005 adds lifecycle fields and runtime tables with RLS/browser access
+revoked. CI also verifies archival access and ownership/command lease invariants.
 
 ## Features still requiring further implementation
 

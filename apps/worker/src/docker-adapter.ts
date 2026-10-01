@@ -1,3 +1,4 @@
+import { DockerEngine } from "./docker-engine.js";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -16,7 +17,7 @@ export function sourcePath(workspace: string, path: string) {
 }
 
 export class DockerAdapter {
-  constructor(private readonly run: Runner = runProcess) {}
+  constructor(private readonly run: Runner = runProcess, private readonly engine = new DockerEngine(run)) {}
   async build(image: string, context: string, profile: BuildProfile, policy: DockerExecutionPolicy, options: RunOptions = {}) {
     this.assertSafe(image, context, policy);
     if (profile.strategy !== "DOCKERFILE" || !Number.isFinite(profile.timeoutSeconds) || profile.timeoutSeconds < 10) throw new Error("Unsupported build profile");
@@ -45,10 +46,23 @@ export class DockerAdapter {
       await this.run("docker", ["buildx", "rm", "--force", builder], 30000).catch(() => undefined);
     }
   }
-  async start(image: string, name: string, profile: BuildProfile, policy: DockerExecutionPolicy, options: RunOptions) {
+  async start(image: string, name: string, profile: BuildProfile, policy: DockerExecutionPolicy, options: RunOptions, environment: Record<string, string> = {}) {
+    if (!/^deploypilot-[a-z0-9-]{1,80}$/.test(name) || !Number.isInteger(profile.port) || profile.port! < 1 || profile.port! > 65535 || Object.entries(environment).some(([key,value]) => !/^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(key) || typeof value !== "string" || value.includes("\0") || value.length > 16000) || Object.keys(environment).length > 50) throw new Error("Unsafe runtime configuration");
+    if (Object.keys(environment).length) {
+      const port = profile.port + "/tcp";
+      await this.engine.call("POST", "/containers/create?name=" + encodeURIComponent(name), { Image: image, ...(profile.command?.length ? { Cmd: profile.command } : {}), Env: Object.entries(environment).map(([key,value]) => key + "=" + value), User: "1000:1000", Labels: { "deploypilot.managed": "true" }, ExposedPorts: { [port]: {} }, HostConfig: { Memory: policy.memoryLimitMb * 1048576, MemorySwap: policy.memoryLimitMb * 1048576, NanoCpus: Math.round(policy.cpuLimit * 1e9), PidsLimit: policy.pidsLimit, CapDrop: ["ALL"], SecurityOpt: ["no-new-privileges"], ReadonlyRootfs: true, Tmpfs: { "/tmp": "rw,noexec,nosuid,size=64m" }, NetworkMode: "bridge", PortBindings: { [port]: [{ HostIp: "127.0.0.1", HostPort: "" }] } } }, options.signal);
+      await this.engine.call("POST", "/containers/" + encodeURIComponent(name) + "/start", undefined, options.signal);
+      return { code: 0, output: "" };
+    }
     const args = ["run", "--detach", "--name", name, "--label", "deploypilot.managed=true", "--memory", policy.memoryLimitMb + "m", "--cpus", String(policy.cpuLimit), "--pids-limit", String(policy.pidsLimit), "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--user", "1000:1000", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "--network", "bridge"];
     if (profile.port) args.push("--publish", "127.0.0.1::" + profile.port);
     return this.run("docker", [...args, image, ...(profile.command ?? [])], 30000, options);
+  }
+  async runtimeEndpoint(name: string, profile: BuildProfile) {
+    const result = await this.run("docker", ["port", name, profile.port + "/tcp"], 10000);
+    const port = result.output.trim().match(/^127\.0\.0\.1:(\d+)$/)?.[1];
+    if (!port) throw new Error("Runtime port is unavailable");
+    return "http://127.0.0.1:" + port;
   }
   async health(name: string, profile: BuildProfile, options: RunOptions) {
     if (!profile.port || !profile.healthcheckPath) throw new Error("Deployments require a container port and HTTP health-check path. Save a new build profile.");
@@ -71,6 +85,9 @@ export class DockerAdapter {
     }
     throw new Error("Container failed its HTTP health check");
   }
+  runtimeAction(name: string, action: "STOP" | "START" | "RESTART") { return this.run("docker", [action.toLowerCase(), ...(action === "START" ? [] : ["--time", "10"]), name], 30000); }
+  async imageId(name: string) { const result = await this.run("docker", ["inspect", "--format", "{{.Image}}", name], 10000); const id = result.output.trim(); if (!/^sha256:[a-f0-9]{64}$/.test(id)) throw new Error("Invalid runtime image ID"); return id; }
+  async running(name: string) { try { const result = await this.run("docker", ["inspect", "--format", "{{.State.Running}}", name], 10000); return result.output.trim() === "true"; } catch { return null; } }
   logs(name: string, onOutput: (line: string) => void) { return this.run("docker", ["logs", "--tail", "100", name], 10000, { onOutput }); }
   async cleanup(name: string, image: string) {
     await this.run("docker", ["rm", "--force", name], 10000).catch(() => undefined);

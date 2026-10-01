@@ -3,6 +3,7 @@ import type { Request } from "express";
 import { createHash, randomBytes } from "node:crypto";
 import { db } from "@deploypilot/database/client";
 import type { Prisma, TeamRole } from "@prisma/client";
+import { cancelPending } from "./cancel-pending.js";
 import { AuthService } from "./auth.service.js";
 
 export function inviteHash(token: string) { return createHash("sha256").update(token).digest("hex"); }
@@ -30,9 +31,11 @@ export class TeamsController {
     return member;
   }
 
-  private async teamTransaction<T>(teamId: string, userId: string, work: (tx: Prisma.TransactionClient, role: TeamRole) => Promise<T>) {
+  private async teamTransaction<T>(teamId: string, userId: string, work: (tx: Prisma.TransactionClient, role: TeamRole) => Promise<T>, allowArchived = false) {
     return db.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM "Team" WHERE id = ${teamId} FOR UPDATE`;
+      const team = await tx.team.findUnique({ where: { id: teamId } });
+      if (!team || (team.archivedAt && !allowArchived)) throw new BadRequestException("Team is archived");
       const current = await tx.teamMember.findUnique({ where: { teamId_userId: { teamId, userId } } });
       if (!current) throw new NotFoundException("Team not found");
       return work(tx, current.role);
@@ -107,6 +110,8 @@ export class TeamsController {
       if (!invite || invite.usedAt || invite.expiresAt <= new Date()) throw new BadRequestException("Invitation is invalid or expired");
       if (invite.email !== user.email.toLowerCase()) throw new ForbiddenException("Sign in with the email address this invitation was issued to");
       await tx.$queryRaw`SELECT id FROM "Team" WHERE id = ${invite.teamId} FOR UPDATE`;
+      const team = await tx.team.findUnique({ where: { id: invite.teamId } });
+      if (!team || team.archivedAt) throw new BadRequestException("Team is archived");
       const claimed = await tx.teamInvite.updateMany({ where: { id: invite.id, usedAt: null, expiresAt: { gt: new Date() } }, data: { usedAt: new Date() } });
       if (!claimed.count) throw new BadRequestException("Invitation has already been used");
       // Existing members keep their role; old invitations can never elevate them.
@@ -167,4 +172,64 @@ export class TeamsController {
       return { repositoryId, teamId };
     });
   }
+  @Post("/v1/teams/:teamId/transfer")
+  async transfer(@Req() request: Request, @Param("teamId") teamId: string, @Body() body: { userId?: string }) {
+    const user = await this.auth.user(request);
+    return this.teamTransaction(teamId, user.id, async (tx, role) => {
+      if (role !== "OWNER") throw new ForbiddenException("Only the owner can transfer ownership");
+      if (body.userId === null || body.userId === "") {
+        await tx.team.update({ where: { id: teamId }, data: { ownerTransferToId: null } });
+        return { pending: false };
+      }
+      const member = typeof body.userId === "string" ? await tx.teamMember.findUnique({ where: { teamId_userId: { teamId, userId: body.userId } } }) : null;
+      if (!member || member.role !== "ADMIN") throw new BadRequestException("Select an existing team administrator");
+      await tx.team.update({ where: { id: teamId }, data: { ownerTransferToId: member.userId } });
+      await audit(tx, teamId, user.id, "ownership.requested", member.userId);
+      return { pending: true };
+    });
+  }
+
+  @Post("/v1/teams/:teamId/transfer/accept")
+  async acceptOwnership(@Req() request: Request, @Param("teamId") teamId: string) {
+    const user = await this.auth.user(request);
+    return this.teamTransaction(teamId, user.id, async (tx, role) => {
+      const team = await tx.team.findUniqueOrThrow({ where: { id: teamId } });
+      if (role !== "ADMIN" || team.ownerTransferToId !== user.id) throw new ForbiddenException("No ownership transfer is addressed to you");
+      await tx.teamMember.updateMany({ where: { teamId, role: "OWNER" }, data: { role: "ADMIN" } });
+      await tx.teamMember.update({ where: { teamId_userId: { teamId, userId: user.id } }, data: { role: "OWNER" } });
+      await tx.team.update({ where: { id: teamId }, data: { ownerTransferToId: null } });
+      await audit(tx, teamId, user.id, "ownership.accepted", user.id);
+      return { role: "OWNER" };
+    });
+  }
+
+  @Post("/v1/teams/:teamId/archive")
+  async archive(@Req() request: Request, @Param("teamId") teamId: string, @Body() body: { name?: string }) {
+    const user = await this.auth.user(request);
+    return this.teamTransaction(teamId, user.id, async (tx, role) => {
+      const team = await tx.team.findUniqueOrThrow({ where: { id: teamId } });
+      if (role !== "OWNER") throw new ForbiddenException("Only the owner can archive a team");
+      if (body.name !== team.name) throw new BadRequestException("Type the team name to archive it");
+      if (await tx.deploymentRuntime.count({ where: { deployment: { repository: { teamId } }, state: { notIn: ["STOPPED", "MISSING"] } } })) throw new BadRequestException("Stop the team's recorded runtimes before archiving");
+      if (await tx.deployment.count({ where: { repository: { teamId }, status: "RUNNING" } })) throw new BadRequestException("Wait for active builds to finish before archiving");
+      await cancelPending(tx, { repository: { teamId } }, "Team archived");
+      await tx.worker.updateMany({ where: { repository: { teamId } }, data: { revokedAt: new Date() } });
+      await tx.teamInvite.updateMany({ where: { teamId, usedAt: null }, data: { usedAt: new Date() } });
+      await tx.team.update({ where: { id: teamId }, data: { archivedAt: new Date(), ownerTransferToId: null } });
+      await audit(tx, teamId, user.id, "team.archived", team.name);
+      return { archived: true };
+    });
+  }
+
+  @Post("/v1/teams/:teamId/restore")
+  async restore(@Req() request: Request, @Param("teamId") teamId: string) {
+    const user = await this.auth.user(request);
+    return this.teamTransaction(teamId, user.id, async (tx, role) => {
+      if (role !== "OWNER") throw new ForbiddenException("Only the owner can restore a team");
+      await tx.team.update({ where: { id: teamId }, data: { archivedAt: null } });
+      await audit(tx, teamId, user.id, "team.restored", teamId);
+      return { restored: true };
+    }, true);
+  }
+
 }
