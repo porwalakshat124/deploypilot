@@ -24,18 +24,22 @@ export class GitHubService {
     if (!appResponse.ok) throw new ServiceUnavailableException("GitHub App discovery is unavailable");
     const app = await appResponse.json() as { slug?: string };
     if (!app.slug || !/^[a-z0-9-]+$/i.test(app.slug)) throw new ServiceUnavailableException("GitHub App discovery is unavailable");
-    // Resolve the current login from the verified durable ID, never a submitted username.
-    const accountResponse = await fetch(`https://api.github.com/user/${githubUserId}`, { headers: { Accept: headers.Accept }, signal: AbortSignal.timeout(15000) });
-    if (!accountResponse.ok) throw new ServiceUnavailableException("GitHub account discovery is unavailable");
-    const account = await accountResponse.json() as { id?: number; login?: string; type?: string };
-    if (String(account.id) !== githubUserId || account.type !== "User" || !account.login) throw new ForbiddenException("GitHub account does not match your signed-in identity");
     const installUrl = `https://github.com/apps/${app.slug}/installations/new`;
-    const response = await fetch(`https://api.github.com/users/${encodeURIComponent(account.login)}/installation`, { headers, signal: AbortSignal.timeout(15000) });
-    if (response.status === 404) return { installationId: null, accountLogin: account.login, installUrl };
-    if (!response.ok) throw new ServiceUnavailableException("GitHub installation discovery is unavailable");
-    const installation = await response.json() as { id?: number; account?: { id?: number; type?: string }; suspended_at?: string | null };
-    if (!Number.isSafeInteger(installation.id) || installation.account?.type !== "User" || String(installation.account.id) !== githubUserId || installation.suspended_at) throw new ForbiddenException("GitHub installation is unavailable or belongs to another account");
-    return { installationId: String(installation.id), accountLogin: account.login, installUrl };
+    // App-authenticated discovery avoids the shared-IP public account lookup.
+    // Return only the installation matching the Supabase-verified durable ID.
+    for (let page = 1; page <= 10; page++) {
+      const response = await fetch(`https://api.github.com/app/installations?per_page=100&page=${page}`, { headers, signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new ServiceUnavailableException(response.status === 403 || response.status === 429 ? "GitHub discovery is rate limited; try again later" : "GitHub installation discovery is unavailable");
+      const installations = await response.json() as { id?: number; account?: { id?: number; type?: string; login?: string }; suspended_at?: string | null }[];
+      if (!Array.isArray(installations)) throw new ServiceUnavailableException("GitHub installation discovery is unavailable");
+      const installation = installations.find(value => value.account?.type === "User" && String(value.account.id) === githubUserId);
+      if (installation) {
+        if (!Number.isSafeInteger(installation.id) || !installation.account?.login || installation.suspended_at) throw new ForbiddenException("GitHub installation is unavailable");
+        return { installationId: String(installation.id), accountLogin: installation.account.login, installUrl };
+      }
+      if (installations.length < 100) return { installationId: null, accountLogin: "your GitHub account", installUrl };
+    }
+    throw new ServiceUnavailableException("GitHub installation discovery exceeded its page limit");
   }
 
   async assertInstallationOwner(installationId: string, githubUserId: string, userToken?: string) {
