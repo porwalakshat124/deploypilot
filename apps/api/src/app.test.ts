@@ -4,6 +4,7 @@ const db = vi.hoisted(() => ({
   repository: { findMany: vi.fn(), findFirst: vi.fn() },
   deployment: { create: vi.fn(), findFirst: vi.fn(), findMany:vi.fn(), groupBy:vi.fn() },
   deploymentEvent:{create:vi.fn()},
+  deploymentEffect:{findFirst:vi.fn()},
   $queryRaw:vi.fn(),
   $transaction:vi.fn(),
   worker: { findUnique: vi.fn() }
@@ -22,6 +23,11 @@ const profile = { strategy: "DOCKERFILE", timeoutSeconds: 900, port: 3000, healt
 const repository = () => ({ id: "repo", defaultBranch: "main", installation: { installationId: "123" }, fullName: "owner/repo", configs: [{ id: "config", branchRule: "main", profile }], environments: [{ id: "env" }], workers: [{ id: "worker", revokedAt: null }] });
 beforeEach(() => { vi.clearAllMocks(); db.$transaction.mockImplementation(fn=>fn(db)); db.repository.findFirst.mockResolvedValue(repository()); db.deployment.create.mockResolvedValue({ id: "deployment", status: "QUEUED", commitSha: "a".repeat(40) }); });
 describe("repository and execution authorization", () => {
+  it("returns a clear expiry response instead of recreating an expired archive",async()=>{
+    db.deployment.findFirst.mockResolvedValue({id:"deployment",status:"SUCCEEDED"});
+    db.deploymentEffect.findFirst.mockResolvedValue({id:"expired"});
+    await expect(controller.archiveLogs(request,"deployment")).rejects.toThrow("90-day retention");
+  });
   it("reports viewer setup as read-only without weakening the repository access check",async()=>{
     db.repository.findFirst.mockResolvedValueOnce(repository()).mockResolvedValueOnce(null);
     expect(await controller.repositorySetup(request,"repo")).toMatchObject({canDeploy:false});
