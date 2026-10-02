@@ -36,6 +36,7 @@ export type BuildProfile = {
   command?: string[];
   timeoutSeconds: number;
   requiredSecretNames: string[];
+  buildSecretNames?: string[];
 };
 
 export type DeploymentJob = {

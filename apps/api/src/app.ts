@@ -10,7 +10,7 @@ import { githubLifecycle, type LifecyclePayload } from "./github-lifecycle.js";
 import { ReleasesController } from "./releases.controller.js";
 import { RuntimeController } from "./runtime.controller.js";
 import { SecretsController } from "./secrets.controller.js";
-import { snapshotSecrets, runtimeEnvironment } from "./environment-secrets.js";
+import { snapshotSecrets, profileSecretNames, splitProfileSecrets } from "./environment-secrets.js";
 import { OperationsController } from "./operations.controller.js";
 import { OperationsAlerts, OperationsAlertController } from "./operations-alerts.js";
 import { TeamsController } from "./teams.controller.js";
@@ -110,7 +110,8 @@ export class AppController {
     const user = await this.auth.user(request);
     const repository = await db.repository.findFirst({ where: { id: repositoryId, ...repositoryAccess(user.id) }, include: { configs: { orderBy: { createdAt: "desc" } }, environments: true, workers: { select: { id: true, name: true, version: true, lastSeenAt: true, revokedAt: true } } } });
     if (!repository) throw new NotFoundException("Repository not found");
-    return repository;
+    const canDeploy = Boolean(await db.repository.findFirst({ where: { id: repositoryId, ...repositoryAccess(user.id, "deploy") }, select: { id: true } }));
+    return { ...repository, canDeploy };
   }
 
   private async sourceRepository(request: Request, repositoryId: string) {
@@ -181,7 +182,8 @@ export class AppController {
     const policy = assertEnvironmentTarget(environment.policy, branch, body.workerId);
     const commitSha = await this.github.resolveCommit(repository.installation.installationId, repository.fullName, body.sha ?? branch);
     if (body.sha && policy.allowedBranches.length && commitSha !== await this.github.resolveCommit(repository.installation.installationId, repository.fullName, branch)) throw new BadRequestException("Restricted environments require the current allowed branch head");
-    const secretSnapshot = await snapshotSecrets(environment.id, (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
+    const secretSnapshot = await snapshotSecrets(environment.id, profileSecretNames(config.profile));
+    if ((config.profile as { buildSecretNames?: string[] }).buildSecretNames?.length && !(repository.workers.find(w => w.id === body.workerId)?.capabilities as { buildSecrets?: boolean })?.buildSecrets) throw new BadRequestException("Update this worker to version 1.3 before deploying build secrets");
     if (secretSnapshot.length && !(repository.workers.find(w => w.id === body.workerId)?.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) throw new BadRequestException("Update this worker to version 1.2 before deploying secrets");
     const deployment = await db.deployment.create({ data: { secretSnapshot, repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: body.workerId, commitSha, sourceBranch: branch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.MANUAL, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
     // Durable database polling is the remote worker queue; no public Redis credentials are needed.
@@ -211,6 +213,22 @@ export class AppController {
     const canApprove = result.approvalStatus === "PENDING" && result.requestedById !== user.id && Boolean(await db.repository.findFirst({ where: { id: result.repositoryId, ...repositoryAccess(user.id, "admin") }, select: { id: true } }));
     const { secretSnapshot: _sealed, ...safeResult } = result;
     return { ...safeResult, canApprove, diagnosisEnabled: process.env.AI_DIAGNOSIS_ENABLED !== "false" && Boolean(process.env.OPENAI_API_KEY) };
+  }
+
+  @Get("/v1/deployments/:deploymentId/artifacts")
+  async artifacts(@Req() request: Request, @Param("deploymentId") deploymentId: string) {
+    const user = await this.auth.user(request);
+    const deployment = await db.deployment.findFirst({ where: { id: deploymentId, repository: repositoryAccess(user.id) }, select: {
+      id: true, commitSha: true, sourceBranch: true, status: true, releaseKind: true, sourceDeploymentId: true, targetWorkerId: true, createdAt: true,
+      repository: { select: { fullName: true } }, config: { select: { id: true, version: true } }, environment: { select: { id: true, name: true } },
+      runtime: { select: { imageId: true, state: true } }, effects: { where: { kind: "archive" }, select: { status: true } }
+    } });
+    if (!deployment) throw new NotFoundException("Deployment not found");
+    return { version: 1, deploymentId: deployment.id, source: { repository: deployment.repository.fullName, commitSha: deployment.commitSha, branch: deployment.sourceBranch },
+      buildProfile: deployment.config, environment: deployment.environment, workerId: deployment.targetWorkerId, releaseKind: deployment.releaseKind, sourceDeploymentId: deployment.sourceDeploymentId,
+      image: deployment.runtime?.imageId ? { id: deployment.runtime.imageId, location: "worker-local", runtimeState: deployment.runtime.state } : null,
+      logArchive: { status: deployment.effects[0]?.status ?? "NOT_RECORDED" }, createdAt: deployment.createdAt,
+      limitations: "Images remain on the team worker; this record does not certify image availability, signing, SBOM or a registry upload." };
   }
 
   @Get("/v1/overview")
@@ -281,7 +299,8 @@ export class AppController {
     if (!/^[a-f0-9]{40}$/i.test(previous.commitSha)) throw new BadRequestException("Legacy deployment has no immutable SHA; create a new deployment");
     if (previous.reuseImageId && !(worker.capabilities as { runtimeManagement?: boolean })?.runtimeManagement) throw new BadRequestException("Update this worker before retrying an immutable rollback");
     const policy = assertEnvironmentTarget(environment.policy, previous.sourceBranch, worker.id);
-    const secretSnapshot = await snapshotSecrets(environment.id, (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
+    const secretSnapshot = await snapshotSecrets(environment.id, profileSecretNames(config.profile));
+    if ((config.profile as { buildSecretNames?: string[] }).buildSecretNames?.length && !(worker.capabilities as { buildSecrets?: boolean })?.buildSecrets) throw new BadRequestException("Update this worker to version 1.3 before deploying build secrets");
     if (secretSnapshot.length && !(worker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) throw new BadRequestException("Update this worker to version 1.2 before deploying secrets");
     const deployment = await db.deployment.create({ data: { secretSnapshot, releaseKind: previous.releaseKind, sourceDeploymentId: previous.sourceDeploymentId, reuseImageId: previous.reuseImageId, previewNumber: previous.previewNumber, repositoryId: previous.repositoryId, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: previous.commitSha, sourceBranch: previous.sourceBranch, requestedById: user.id, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.RETRY, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map((name) => ({ name })) } } });
     await this.eventForWorker(deployment.id, "deployment.retry", { retriedFrom: deploymentId });
@@ -359,7 +378,8 @@ export class AppController {
         return { accepted: true, ignored: true, reason: "Environment policy excludes this push target" };
       }
       if (repository.archivedAt || repository.team?.archivedAt) return { accepted: true, ignored: true };
-      const secretSnapshot = await snapshotSecrets(environment.id, (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
+      const secretSnapshot = await snapshotSecrets(environment.id, profileSecretNames(config.profile));
+      if ((config.profile as { buildSecretNames?: string[] }).buildSecretNames?.length && !(worker.capabilities as { buildSecrets?: boolean })?.buildSecrets) return { accepted: true, ignored: true, reason: "Worker requires update for build secrets" };
       if (secretSnapshot.length && !(worker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) return { accepted: true, ignored: true, reason: "Worker requires update for secrets" };
       const deployment = await tx.deployment.create({ data: { secretSnapshot, repositoryId: repository.id, configId: config.id, environmentId: environment.id, targetWorkerId: worker.id, commitSha: payload.after!, sourceBranch: branch, approvalStatus: policy.requiresApproval ? "PENDING" : "NOT_REQUIRED", trigger: DeploymentTrigger.PUSH, stages: { create: ["dependencies", "tests", "docker-build", "health-check", "deploy"].map(name => ({ name })) } } });
       await tx.webhookDelivery.update({ where: { deliveryId }, data: { processedAt: new Date(), outcome: "deployment-created:" + deployment.id } });
@@ -449,12 +469,12 @@ export class AppController {
   }
 
   @Post("/v1/workers/:workerId/heartbeat")
-  async heartbeat(@Req() request: Request, @Param("workerId") workerId: string, @Body() body: { version?: string; capabilities?: { apiPolling?: boolean; runtimeSecrets?: boolean; runtimeManagement?: boolean } }) {
+  async heartbeat(@Req() request: Request, @Param("workerId") workerId: string, @Body() body: { version?: string; capabilities?: { apiPolling?: boolean; runtimeSecrets?: boolean; buildSecrets?: boolean; runtimeManagement?: boolean } }) {
     const authorization = request.headers.authorization;
     const token = authorization?.startsWith("Bearer ") ? authorization.slice(7) : "";
     const worker = await db.worker.findUnique({ where: { id: workerId } });
     if (!worker || !workerIsActive(worker) || !workerTokenMatches(token, worker.tokenHash)) throw new UnauthorizedException();
-    const updated = await db.worker.update({ where: { id: workerId }, data: { lastSeenAt: new Date(), version: String(body.version ?? worker.version).slice(0, 50), ...(body.capabilities?.apiPolling === true ? { capabilities: { docker: true, apiPolling: true, maxConcurrency: 1, runtimeSecrets: body.capabilities.runtimeSecrets === true, runtimeManagement: body.capabilities.runtimeManagement === true } } : {}) } });
+    const updated = await db.worker.update({ where: { id: workerId }, data: { lastSeenAt: new Date(), version: String(body.version ?? worker.version).slice(0, 50), ...(body.capabilities?.apiPolling === true ? { capabilities: { docker: true, apiPolling: true, maxConcurrency: 1, runtimeSecrets: body.capabilities.runtimeSecrets === true, buildSecrets: body.capabilities.buildSecrets === true, runtimeManagement: body.capabilities.runtimeManagement === true } } : {}) } });
     return { workerId: updated.id, status: "ONLINE", lastSeenAt: updated.lastSeenAt };
   }
 
@@ -500,15 +520,16 @@ export class AppController {
       await tx.deployment.update({ where: { id: candidate.id }, data: { approvalStatus: "PENDING" } });
       return { job: null };
     }
-    const environment = runtimeEnvironment(candidate.secretSnapshot);
-    if (Object.keys(environment).length && !(currentWorker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) return { job: null };
+    const secrets = splitProfileSecrets(candidate.secretSnapshot, candidate.config.profile);
+    if (Object.keys(secrets.runtimeEnvironment).length && !(currentWorker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) return { job: null };
+    if (Object.keys(secrets.buildSecrets).length && !(currentWorker.capabilities as { buildSecrets?: boolean })?.buildSecrets) return { job: null };
     const claimed = await tx.deployment.updateMany({
       where: { id: candidate.id, targetWorkerId: workerId, status: DeploymentStatus.QUEUED, approvalStatus: { in: ["NOT_REQUIRED", "APPROVED"] } },
       data: { status: DeploymentStatus.RUNNING, startedAt: new Date() },
     });
     if (claimed.count !== 1) return { job: null };
     await tx.deploymentEvent.create({ data: { deploymentId: candidate.id, type: "deployment.status", payload: { deploymentId: candidate.id, status: "RUNNING" } } });
-    return { job: { deploymentId: candidate.id, commitSha: candidate.commitSha, profile: candidate.config.profile, runtimeEnvironment: environment, reuseImageId: candidate.reuseImageId } };
+    return { job: { deploymentId: candidate.id, commitSha: candidate.commitSha, profile: candidate.config.profile, ...secrets, reuseImageId: candidate.reuseImageId } };
     });
   }
 

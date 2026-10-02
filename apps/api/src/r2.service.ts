@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createHash } from "node:crypto";
 
@@ -39,6 +39,24 @@ export class R2Service {
     const bytes = await stored.Body?.transformToByteArray();
     if (!bytes || createHash("sha256").update(bytes).digest("hex") !== sha256) throw new Error("Offsite backup verification failed");
     return { key, size: body.length, sha256, verified: true };
+  }
+  async inventory() {
+    if (!this.configured() || !this.client || !this.bucket) return { configured: false };
+    const groups = [];
+    for (const prefix of ["backups/", "deployments/"]) {
+      let token: string | undefined, count = 0, bytes = 0, truncated = false;
+      for (let page = 0; page < 10; page++) {
+        const result = await this.client.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, MaxKeys: 1000, ContinuationToken: token }));
+        count += result.Contents?.length ?? 0;
+        bytes += (result.Contents ?? []).reduce((sum,object)=>sum + (object.Size ?? 0),0);
+        truncated = result.IsTruncated === true;
+        if (!truncated) break;
+        if (!result.NextContinuationToken || result.NextContinuationToken === token) throw new Error("Invalid storage inventory pagination");
+        token = result.NextContinuationToken;
+      }
+      groups.push({ prefix, count, bytes, truncated });
+    }
+    return { configured: true, checkedAt: new Date().toISOString(), groups, deletionEnabled: false };
   }
 }
 

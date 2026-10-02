@@ -22,6 +22,22 @@ const profile = { strategy: "DOCKERFILE", timeoutSeconds: 900, port: 3000, healt
 const repository = () => ({ id: "repo", defaultBranch: "main", installation: { installationId: "123" }, fullName: "owner/repo", configs: [{ id: "config", branchRule: "main", profile }], environments: [{ id: "env" }], workers: [{ id: "worker", revokedAt: null }] });
 beforeEach(() => { vi.clearAllMocks(); db.$transaction.mockImplementation(fn=>fn(db)); db.repository.findFirst.mockResolvedValue(repository()); db.deployment.create.mockResolvedValue({ id: "deployment", status: "QUEUED", commitSha: "a".repeat(40) }); });
 describe("repository and execution authorization", () => {
+  it("reports viewer setup as read-only without weakening the repository access check",async()=>{
+    db.repository.findFirst.mockResolvedValueOnce(repository()).mockResolvedValueOnce(null);
+    expect(await controller.repositorySetup(request,"repo")).toMatchObject({canDeploy:false});
+    expect(db.repository.findFirst).toHaveBeenLastCalledWith({where:{id:"repo",...repositoryAccess("owner","deploy")},select:{id:true}});
+  });
+  it("denies foreign artifact records using current repository membership",async()=>{
+    db.deployment.findFirst.mockResolvedValue(null);
+    await expect(controller.artifacts(request,"foreign")).rejects.toThrow("Deployment not found");
+    expect(db.deployment.findFirst).toHaveBeenCalledWith(expect.objectContaining({where:{id:"foreign",repository:repositoryAccess("owner")}}));
+  });
+  it("returns artifact provenance without a secret snapshot or secret values",async()=>{
+    db.deployment.findFirst.mockResolvedValue({id:"deployment",commitSha:"a".repeat(40),repository:{fullName:"owner/repo"},config:{id:"config",version:2},runtime:{imageId:"sha256:"+"b".repeat(64),state:"STOPPED"},effects:[{status:"SUCCEEDED"}],secretSnapshot:"must-never-return"});
+    const record=await controller.artifacts(request,"deployment");
+    expect(record.image?.location).toBe("worker-local");
+    expect(JSON.stringify(record)).not.toContain("must-never-return");
+  });
   it("does not expose encrypted secret snapshots in the dashboard overview",async()=>{
     db.deployment.findMany.mockResolvedValue([{id:"deployment",secretSnapshot:[{ciphertext:"sealed-value",name:"PRIVATE_KEY"}]}]);db.deployment.groupBy.mockResolvedValue([]);
     expect(await controller.latestDeployment(request)).toEqual({deployments:[{id:"deployment"}],counts:[]});

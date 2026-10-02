@@ -10,7 +10,7 @@ import { runProcess } from "./process-runner.js";
 const apiUrl = process.env.WORKER_API_URL ?? "http://localhost:4000";
 const workerId = process.env.WORKER_ID;
 const workerToken = process.env.WORKER_TOKEN;
-const version = process.env.WORKER_VERSION ?? "1.2.0";
+const version = process.env.WORKER_VERSION ?? "1.3.0";
 if (!workerId || !workerToken) throw new Error("WORKER_ID and WORKER_TOKEN are required");
 const endpoint = new URL(apiUrl);
 if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(endpoint.hostname))) throw new Error("Remote workers require an HTTPS API URL");

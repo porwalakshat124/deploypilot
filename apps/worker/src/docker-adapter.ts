@@ -18,7 +18,7 @@ export function sourcePath(workspace: string, path: string) {
 
 export class DockerAdapter {
   constructor(private readonly run: Runner = runProcess, private readonly engine = new DockerEngine(run)) {}
-  async build(image: string, context: string, profile: BuildProfile, policy: DockerExecutionPolicy, options: RunOptions = {}) {
+  async build(image: string, context: string, profile: BuildProfile, policy: DockerExecutionPolicy, options: RunOptions = {}, secrets: Record<string,string> = {}) {
     this.assertSafe(image, context, policy);
     if (profile.strategy !== "DOCKERFILE" || !Number.isFinite(profile.timeoutSeconds) || profile.timeoutSeconds < 10) throw new Error("Unsupported build profile");
     const workspace = sourcePath(context, profile.dockerContext ?? ".");
@@ -35,10 +35,17 @@ export class DockerAdapter {
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || /secret|token|password|key/i.test(key) || typeof value !== "string" || value.includes("\0")) throw new Error("Unsafe build argument");
       args.push("--build-arg", key + "=" + value);
     }
+    if (Object.keys(secrets).length > 50 || Object.entries(secrets).some(([key,value]) => !/^[A-Za-z_][A-Za-z0-9_]{0,99}$/.test(key) || typeof value !== "string" || value.includes("\0") || value.length > 16000)) throw new Error("Invalid build secrets");
+    const secretEnv: Record<string,string> = {};
+    for (const [index,[key,value]] of Object.entries(secrets).entries()) {
+      const variable = "DEPLOYPILOT_BUILD_SECRET_" + index;
+      secretEnv[variable] = value;
+      args.push("--secret", "id=" + key + ",env=" + variable);
+    }
     options.signal?.addEventListener("abort", stopBuilder, { once: true });
     try {
       await this.run("docker", ["buildx", "create", "--name", builder, "--driver", "docker-container", "--driver-opt", "memory=" + policy.memoryLimitMb + "m", "--driver-opt", "memory-swap=" + policy.memoryLimitMb + "m", "--driver-opt", "cpu-period=100000", "--driver-opt", "cpu-quota=" + Math.round(policy.cpuLimit * 100000)], 30000, options);
-      return await this.run("docker", [...args, workspace], Math.min(profile.timeoutSeconds, policy.timeoutSeconds) * 1000, options);
+      return await this.run("docker", [...args, workspace], Math.min(profile.timeoutSeconds, policy.timeoutSeconds) * 1000, Object.keys(secrets).length ? { ...options, env: secretEnv, suppressOutput: true } : options);
     } finally {
       options.signal?.removeEventListener("abort", stopBuilder);
       await abortCleanup;

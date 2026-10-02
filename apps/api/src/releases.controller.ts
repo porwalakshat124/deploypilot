@@ -4,7 +4,7 @@ import { db } from "@deploypilot/database/client";
 import { AuthService } from "./auth.service.js";
 import { repositoryAccess } from "./access.js";
 import { assertEnvironmentTarget } from "./environment-policy.js";
-import { snapshotSecrets } from "./environment-secrets.js";
+import { snapshotSecrets, profileSecretNames } from "./environment-secrets.js";
 import { workerIsActive } from "./worker-auth.js";
 
 @Controller()
@@ -27,7 +27,8 @@ export class ReleasesController {
     const policy = assertEnvironmentTarget(env.policy, source.sourceBranch, workerId);
     if (kind === "ROLLBACK" && !source.runtime?.imageId) throw new BadRequestException("Rollback requires a recorded immutable image from a version 1.2 worker");
     if (kind === "ROLLBACK" && !(worker.capabilities as { runtimeManagement?: boolean })?.runtimeManagement) throw new BadRequestException("Update the worker to version 1.2 before rollback");
-    const secretSnapshot = await snapshotSecrets(env.id, (source.config.profile as { requiredSecretNames?: string[] }).requiredSecretNames);
+    const secretSnapshot = await snapshotSecrets(env.id, profileSecretNames(source.config.profile));
+    if ((source.config.profile as { buildSecretNames?: string[] }).buildSecretNames?.length && !(worker.capabilities as { buildSecrets?: boolean })?.buildSecrets) throw new BadRequestException("Update the worker to version 1.3 before deploying build secrets");
     if (secretSnapshot.length && !(worker.capabilities as { runtimeSecrets?: boolean })?.runtimeSecrets) throw new BadRequestException("Update the target worker before deploying secrets");
     return db.deployment.create({ data: {
       repositoryId: source.repositoryId, configId: source.configId, environmentId, targetWorkerId: workerId, commitSha: source.commitSha, sourceBranch: source.sourceBranch,

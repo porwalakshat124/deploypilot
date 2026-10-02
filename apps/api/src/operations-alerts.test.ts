@@ -8,6 +8,7 @@ describe("operational alerts", () => {
   it("requires the dedicated credential and rejects arbitrary messages", async () => {
     const service = new OperationsAlerts(), send = vi.spyOn(service, "send").mockResolvedValue({ sent: true });
     const controller = new OperationsAlertController(service);
+    await expect(controller.storage({headers:{authorization:"Bearer wrong"}} as Request)).rejects.toThrow();
     await expect(controller.notify({ headers: { authorization: "Bearer wrong" } } as Request, { codes: ["MONITOR_TEST"] })).rejects.toThrow();
     await expect(controller.notify({ headers: { authorization: "Bearer fixture-only" } } as Request, { codes: ["arbitrary message"] })).rejects.toThrow();
     expect(send).not.toHaveBeenCalled();

@@ -89,12 +89,14 @@ if (command === 'backup') {
   const file = join(directory, `public-${stamp}.dpbackup`);
   const connection = [url.hostname, url.port || '5432', decodeURIComponent(url.username), decodeURIComponent(url.password), url.pathname.slice(1), 'require'];
   if (connection.some(value => /[\r\n]/.test(value))) throw new Error('Database credentials contain unsupported line breaks');
-  const dump = docker(['run', '--rm', '-i', image, 'sh', '-c', 'IFS= read -r PGHOST; IFS= read -r PGPORT; IFS= read -r PGUSER; IFS= read -r PGPASSWORD; IFS= read -r PGDATABASE; IFS= read -r PGSSLMODE; export PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE PGSSLMODE; exec pg_dump --format=custom --schema=public --no-owner --no-privileges'], connection.join('\n') + '\n');
+  const includeManaged = process.argv.includes('--include-managed');
+  const dumpCommand = 'IFS= read -r PGHOST; IFS= read -r PGPORT; IFS= read -r PGUSER; IFS= read -r PGPASSWORD; IFS= read -r PGDATABASE; IFS= read -r PGSSLMODE; export PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE PGSSLMODE; exec pg_dump --format=custom --schema=public ' + (includeManaged ? '--schema=auth --schema=storage ' : '') + '--no-owner --no-privileges';
+  const dump = docker(['run', '--rm', '-i', image, 'sh', '-c', dumpCommand], connection.join('\n') + '\n');
   try { await Promise.all([encrypt(dump.child.stdout, file), dump.done]); }
   catch (error) { await rm(file, { force: true }); throw error; }
   const secret = join(directory, `secret-key-${stamp}.dpbackup`);
   await encrypt(createReadStream(join(root, '.env.secret-key')), secret);
-  const manifest = { version: 1, createdAt: new Date().toISOString(), scope: 'public application schema only; Supabase Auth/Storage and Docker images require separate recovery', file, secret, sha256: createHash('sha256').update(await readFile(file)).digest('hex') };
+  const manifest = { version: 1, createdAt: new Date().toISOString(), includeManaged, scope: includeManaged ? 'public, auth and storage database schemas; Storage binary objects, provider configuration and Docker images are excluded' : 'public application schema only; Supabase Auth/Storage and Docker images require separate recovery', file, secret, sha256: createHash('sha256').update(await readFile(file)).digest('hex') };
   await writeFile(file + '.json', JSON.stringify(manifest, null, 2), { mode: 0o600 });
   console.log(JSON.stringify({ backup: file, encrypted: true, secretKeyBackedUp: true, scope: manifest.scope }));
   try { await stat(join(root, '.env.operations')); await upload(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -126,11 +128,18 @@ if (command === 'backup') {
     if (!ready) throw new Error('Restore fixture did not become ready');
     // Only the freshly created, network-isolated fixture is modified.
     execFileSync('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'DROP SCHEMA public;'], { stdio: 'ignore' });
+    if (manifest.includeManaged) execFileSync('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE SCHEMA extensions; CREATE EXTENSION pgcrypto WITH SCHEMA extensions; CREATE EXTENSION "uuid-ossp" WITH SCHEMA extensions;'], { stdio: 'ignore' });
     const restore = docker(['exec', '-i', container, 'pg_restore', '-U', 'postgres', '-d', 'postgres', '--exit-on-error', '--no-owner', '--no-privileges']);
     await Promise.all([pipeline(createReadStream(dump), restore.child.stdin), restore.done]);
     const query = `SELECT json_build_object('users',(SELECT count(*) FROM "User"),'deployments',(SELECT count(*) FROM "Deployment"),'teams',(SELECT count(*) FROM "Team"),'secrets',(SELECT count(*) FROM "EnvironmentSecret"),'rls_enabled',NOT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r' AND NOT c.relrowsecurity));`;
     const counts = JSON.parse(execFileSync('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atc', query], { encoding: 'utf8' }).trim());
     if (!counts.rls_enabled || !counts.users || !counts.deployments) throw new Error('Restored data/RLS verification failed');
+    if (manifest.includeManaged) {
+      const managed = JSON.parse(execFileSync('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atc', "SELECT json_build_object('authUsers',(SELECT count(*) FROM auth.users),'authIdentities',(SELECT count(*) FROM auth.identities),'storageBuckets',(SELECT count(*) FROM storage.buckets),'storageObjects',(SELECT count(*) FROM storage.objects));"], { encoding: 'utf8' }).trim());
+      Object.assign(counts, managed);
+      const orphans = Number(execFileSync('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-Atc', 'SELECT count(*) FROM auth.identities i WHERE NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.id=i.user_id);'], { encoding: 'utf8' }).trim());
+      if (orphans) throw new Error('Recovered Auth identities reference missing users');
+    }
     await writeFile(file + '.verified.json', JSON.stringify({ verifiedAt: new Date().toISOString(), isolated: true, secretKeyRestored: true, counts }, null, 2), { mode: 0o600 });
     console.log(JSON.stringify({ restored: true, isolated: true, secretKeyRestored: true, counts }));
   } finally {

@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { runProcess } from "./process-runner.js";
 describe("process runner", () => {
+  it("does not retain or stream credential output, including failed process errors",async()=>{
+    const lines:string[]=[];
+    await expect(runProcess(process.execPath,["-e","console.log(process.env.DEPLOYPILOT_TEST_SECRET);process.exit(1)"],5000,{env:{DEPLOYPILOT_TEST_SECRET:"test-secret-value"},suppressOutput:true,onOutput:line=>lines.push(line)})).rejects.toThrow(/^.*exit code 1: $/);
+    expect(lines).toEqual([]);
+  });
   it("streams both stdout and stderr before returning bounded output", async () => {
     const lines: string[] = [];
     const result = await runProcess(process.execPath, ["-e", "console.log('first'); console.error('second');"], 5000, { onOutput: line => lines.push(line) });
