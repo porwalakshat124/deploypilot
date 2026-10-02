@@ -10,6 +10,15 @@ generation, validation, type checks and CI exercise the compatibility override.
 CI rejects high-severity production dependency advisories. This registry audit
 does not prove the absence of vulnerabilities or replace independent review.
 
+Focused internal review found that rotating arbitrary Authorization headers created
+fresh request-limit buckets, while every Render request could appear to share the
+same proxy socket address. PR 19 adds independent client-address and bearer-token
+buckets. On Render it uses the Cloudflare-supplied, syntactically validated
+CF-Connecting-IP; it ignores X-Forwarded-For because that header can contain
+caller-supplied values. Local mode uses the socket peer. Tests cover trusted,
+invalid and non-production forwarded values. This is a completed internal fix,
+not the independent security review still required before wider launch.
+
 Review source at the release commit and reproduce the role tests with two GitHub
 users, including organization installations when an organization is available.
 Examine AuthService, access.ts, teams.controller.ts, worker-auth.ts, webhook
