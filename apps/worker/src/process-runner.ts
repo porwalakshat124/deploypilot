@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
-export type RunOptions = { signal?: AbortSignal; onOutput?: (line: string) => void };
+export type RunOptions = { signal?: AbortSignal; onOutput?: (line: string) => void; env?: Record<string,string>; suppressOutput?: boolean };
 export type Runner = (command: string, args: string[], timeoutMs: number, options?: RunOptions) => Promise<{ code: number; output: string }>;
 export const runProcess: Runner = (command, args, timeoutMs, options = {}) => new Promise((resolve, reject) => {
   if (options.signal?.aborted) return reject(options.signal.reason ?? new Error("Cancelled"));
-  const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, ...(options.env ? { env: { ...process.env, ...options.env } } : {}) });
   let output = "";
   let failure: Error | undefined;
   const terminate = (error: Error) => { failure = error; child.kill("SIGKILL"); };
@@ -16,6 +16,7 @@ export const runProcess: Runner = (command, args, timeoutMs, options = {}) => ne
     const decoder = new StringDecoder("utf8");
     let pending = "";
     const flush = (text: string, final = false) => {
+      if (options.suppressOutput) return;
       output = (output + text).slice(-16000);
       pending += text;
       let index: number;

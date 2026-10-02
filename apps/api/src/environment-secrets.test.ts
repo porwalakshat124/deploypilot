@@ -1,10 +1,17 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(()=>({environmentSecret:{findMany:vi.fn()}}));
 vi.mock("@deploypilot/database/client",()=>({db}));
-import { sealSecret, openSecret, redactSecretValues, snapshotSecrets, secretsConfigured } from "./environment-secrets.js";
+import { sealSecret, openSecret, redactSecretValues, snapshotSecrets, secretsConfigured, profileSecretNames, splitProfileSecrets } from "./environment-secrets.js";
 beforeEach(()=>{vi.stubEnv("ENVIRONMENT_SECRET_KEY",Buffer.alloc(32,17).toString("base64"));});
 afterEach(()=>vi.unstubAllEnvs());
 describe("environment secrets",()=>{
+  it("keeps build-only credentials out of runtime injection and fails closed on incomplete snapshots",()=>{
+    const profile={requiredSecretNames:["DATABASE_URL"],buildSecretNames:["NPM_TOKEN","DATABASE_URL"]};
+    expect(profileSecretNames(profile)).toEqual(["DATABASE_URL","NPM_TOKEN"]);
+    const snapshot=[sealSecret("env","DATABASE_URL","db-secret"),sealSecret("env","NPM_TOKEN","npm-secret")];
+    expect(splitProfileSecrets(snapshot,profile)).toEqual({runtimeEnvironment:{DATABASE_URL:"db-secret"},buildSecrets:{NPM_TOKEN:"npm-secret",DATABASE_URL:"db-secret"}});
+    expect(()=>splitProfileSecrets([],profile)).toThrow("incomplete");
+  });
   it("encrypts with unique nonces and binds ciphertext to environment and name",()=>{
     const value="secret-value/with spaces", sealed=sealSecret("env","API_TOKEN",value);
     expect(openSecret(sealed)).toBe(value);

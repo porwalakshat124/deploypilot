@@ -3,7 +3,7 @@ export async function sendHeartbeat(apiUrl: string, workerId: string, token: str
     method: "POST",
     signal: AbortSignal.timeout(15000),
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ version, capabilities: { docker: true, apiPolling: true, maxConcurrency: 1, runtimeSecrets: true, runtimeManagement: true } }),
+    body: JSON.stringify({ version, capabilities: { docker: true, apiPolling: true, maxConcurrency: 1, runtimeSecrets: true, buildSecrets: true, runtimeManagement: true } }),
   });
   if (!response.ok) throw new Error(`Worker heartbeat failed with HTTP ${response.status}`);
   return response.json() as Promise<{ workerId: string; status: string; lastSeenAt: string }>;

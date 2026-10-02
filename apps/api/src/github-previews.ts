@@ -24,7 +24,7 @@ export async function githubPreview(tx: Prisma.TransactionClient, payload: Previ
   if (!/^[a-f0-9]{40}$/.test(pr.head.sha) || !pr.head.ref || pr.head.ref.length > 250) return "ignored-invalid-preview";
   const config = repo.configs.find(c => c.branchRule === pr.head.ref) ?? repo.configs.find(c => c.branchRule === "*");
   // Previews never inherit production secrets, even for branches in the same repository.
-  if (!config || (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames?.length) return "ignored-preview-profile";
+  if (!config || (config.profile as { requiredSecretNames?: string[] }).requiredSecretNames?.length || (config.profile as { buildSecretNames?: string[] }).buildSecretNames?.length) return "ignored-preview-profile";
   const worker = repo.workers.find(w => workerIsActive(w) && w.lastSeenAt && Date.now() - w.lastSeenAt.getTime() < 90000 && (w.capabilities as { runtimeManagement?: boolean })?.runtimeManagement);
   if (!worker) return "ignored-preview-worker";
   if (await tx.deployment.findFirst({ where: { repositoryId: repo.id, previewNumber: payload.number, commitSha: pr.head.sha, status: { not: "CANCELLED" } } })) return "preview.duplicate-commit";

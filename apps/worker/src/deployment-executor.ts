@@ -18,8 +18,9 @@ export class DeploymentExecutor {
     const pendingLogs: { stage: string; level: string; message: string }[] = [];
     let drainingLogs = false;
     const containsSecrets = Object.keys(job.runtimeEnvironment ?? {}).length > 0;
+    const containsBuildSecrets = Object.keys(job.buildSecrets ?? {}).length > 0;
     const output = (line: string) => {
-      if (containsSecrets && stage !== "docker-build") return;
+      if (containsBuildSecrets || (containsSecrets && stage !== "docker-build")) return;
       if (pendingLogs.length >= 500) { abort.abort(new Error("Log delivery cannot keep up with build output")); return; }
       pendingLogs.push({ stage, level: "info", message: line.slice(0, 8000) });
       if (drainingLogs) return;
@@ -53,7 +54,8 @@ export class DeploymentExecutor {
         await api.log(job.deploymentId, stage, "info", "Reusing the immutable image from the selected successful deployment");
       } else {
         const archive = await api.downloadSource(job.deploymentId, abort.signal);
-        await this.source(archive, async workspace => { await this.docker.build(name, workspace, job.profile, policy, options); }, abort.signal);
+        if (containsBuildSecrets) await api.log(job.deploymentId, "system", "info", "BuildKit secret mounts enabled; process output is suppressed for this deployment");
+        await this.source(archive, async workspace => { await this.docker.build(name, workspace, job.profile, policy, options, job.buildSecrets); }, abort.signal);
       }
       await logs;
       abort.signal.throwIfAborted();

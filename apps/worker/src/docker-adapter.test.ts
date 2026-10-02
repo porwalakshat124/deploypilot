@@ -6,6 +6,15 @@ describe("DockerAdapter safety boundary", () => {
   const adapter = new DockerAdapter();
   const profile = { strategy: "DOCKERFILE" as const, timeoutSeconds: 60, requiredSecretNames: [] };
   const policy = { timeoutSeconds: 60, memoryLimitMb: 512, cpuLimit: 1, pidsLimit: 128, networkMode: "none" as const };
+  it("passes BuildKit secrets through process environment only and suppresses output",async()=>{
+    const run=vi.fn<Runner>(async()=>({code:0,output:""}));
+    await new DockerAdapter(run).build("deploypilot-test","src/fixtures/healthy",profile,policy,{}, {NPM_TOKEN:"test-secret-value"});
+    const build=run.mock.calls.find(call=>call[1][1]==="build")!;
+    expect(build[1]).toContain("id=NPM_TOKEN,env=DEPLOYPILOT_BUILD_SECRET_0");
+    expect(build[1].join(" ")).not.toContain("test-secret-value");
+    expect(build[3]).toMatchObject({env:{DEPLOYPILOT_BUILD_SECRET_0:"test-secret-value"},suppressOutput:true});
+    expect(run.mock.calls.filter(call=>call[1][1]!=="build").every(call=>!call[3]?.env)).toBe(true);
+  });
 
   it("force-stops only this job's daemon builder when execution is aborted", async () => {
     const abort = new AbortController();

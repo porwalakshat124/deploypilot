@@ -43,6 +43,19 @@ export async function snapshotSecrets(environmentId: string, names: unknown) {
   runtimeEnvironment(snapshot); // Fail before enqueue when key or ciphertext is invalid.
   return snapshot.map(({ name, environmentId, ciphertext, keyVersion }) => ({ name, environmentId, ciphertext, keyVersion }));
 }
+export function profileSecretNames(profile: unknown): string[] {
+  const p = profile as { requiredSecretNames?: string[]; buildSecretNames?: string[] };
+  return [...new Set([...(p.requiredSecretNames ?? []), ...(p.buildSecretNames ?? [])])];
+}
+export function splitProfileSecrets(snapshot: unknown, profile: unknown) {
+  const values = runtimeEnvironment(snapshot);
+  const p = profile as { requiredSecretNames?: string[]; buildSecretNames?: string[] };
+  const select = (names: string[] = []) => Object.fromEntries(names.map(name => {
+    if (!(name in values)) throw new ServiceUnavailableException("Deployment secret snapshot is incomplete");
+    return [name, values[name]];
+  }));
+  return { runtimeEnvironment: select(p.requiredSecretNames), buildSecrets: select(p.buildSecretNames) };
+}
 export function redactSecretValues(message: string, snapshot: unknown) {
   for (const value of Object.values(runtimeEnvironment(snapshot)).sort((a,b)=>b.length-a.length)) {
     for (const form of [value, encodeURIComponent(value), Buffer.from(value).toString("base64")]) message = message.split(form).join("[REDACTED]");

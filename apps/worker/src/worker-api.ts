@@ -1,6 +1,6 @@
 import type { BuildProfile } from "@deploypilot/shared";
 
-export type ClaimedJob = { deploymentId: string; commitSha: string; profile: BuildProfile; runtimeEnvironment?: Record<string, string>; reuseImageId?: string | null };
+export type ClaimedJob = { deploymentId: string; commitSha: string; profile: BuildProfile; runtimeEnvironment?: Record<string, string>; buildSecrets?: Record<string,string>; reuseImageId?: string | null };
 
 export class WorkerApi {
   constructor(private readonly apiUrl: string, private readonly workerId: string, private readonly workerToken: string) {}

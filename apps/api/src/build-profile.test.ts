@@ -10,5 +10,10 @@ describe("build profile validation", () => {
     expect(() => validateProfile({ ...profile, buildArgs: { API_TOKEN: "secret" } })).toThrow();
     expect(() => validateProfile({ ...profile, requiredSecretNames: ["BAD-NAME"] })).toThrow();
   });
+  it("validates and deduplicates BuildKit secret names",()=>{
+    expect(validateProfile({...profile,buildSecretNames:["NPM_TOKEN","NPM_TOKEN"]})).toMatchObject({buildSecretNames:["NPM_TOKEN"]});
+    expect(()=>validateProfile({...profile,buildSecretNames:["TOKEN,src=/secret"]})).toThrow();
+    expect(()=>validateProfile({...profile,requiredSecretNames:Array.from({length:30},(_,i)=>"R"+i),buildSecretNames:Array.from({length:30},(_,i)=>"B"+i)})).toThrow("50 distinct");
+  });
   it("does not silently ignore unsupported commands", () => expect(() => validateProfile({ ...profile, testCommand: "npm test" })).toThrow());
 });

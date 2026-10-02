@@ -1,4 +1,4 @@
-import { Injectable, Controller, Post, Req, Body, Param, Inject, UnauthorizedException, BadRequestException, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
+import { Injectable, Controller, Get, Post, Req, Body, Param, Inject, UnauthorizedException, BadRequestException, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
 import type { Request } from "express";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { db } from "@deploypilot/database/client";
@@ -53,6 +53,11 @@ export class OperationsAlerts implements OnModuleInit, OnModuleDestroy {
 @Controller()
 export class OperationsAlertController {
   constructor(@Inject(OperationsAlerts) private readonly alerts: OperationsAlerts) {}
+  @Get("/v1/operations/storage")
+  async storage(@Req() request: Request) {
+    if (!validOperationsCredential(request.headers.authorization)) throw new UnauthorizedException();
+    return r2.inventory();
+  }
   @Post("/v1/operations/alert")
   async notify(@Req() request: Request, @Body() body: { codes?: unknown }) {
     if (!validOperationsCredential(request.headers.authorization)) throw new UnauthorizedException();
