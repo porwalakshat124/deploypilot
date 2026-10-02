@@ -11,5 +11,6 @@ try {
     effects: { some: { kind: "archive", status: "SUCCEEDED" } },
     logs: { some: {} },
   }, select: { id: true, status: true, endedAt: true, _count: { select: { logs: true } } }, take: 100 });
-  console.log(JSON.stringify({ mode: "preview-only", days, candidates, preserved: ["deployment history", "audit events", "R2 archives", "Docker images", "running containers", "secrets"], deletionEnabled: false }));
+  const cloudLogs = await db.deployment.findMany({where:{status:{in:["SUCCEEDED","FAILED","CANCELLED","TIMED_OUT"]},endedAt:{lt:new Date(Date.now()-90*86400000)},logs:{none:{}},events:{some:{type:"logs.retained"}},effects:{some:{kind:"archive",status:{in:["SUCCEEDED","EXPIRING"]}}},OR:[{runtime:null},{runtime:{state:"STOPPED"}}]},select:{id:true,endedAt:true},take:100});
+  console.log(JSON.stringify({ mode: "preview-only", days, candidates, cloudArchiveDays:90, cloudLogsRequiringChecksumProof:cloudLogs, preserved: ["deployment history", "audit events", "backup objects", "Docker images", "running containers", "secrets"], deletionEnabled: false }));
 } finally { await db.$disconnect(); }

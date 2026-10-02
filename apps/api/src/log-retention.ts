@@ -2,6 +2,28 @@ import { Injectable, OnModuleInit, OnModuleDestroy } from "@nestjs/common";
 import { db } from "@deploypilot/database/client";
 import { r2 } from "./r2.service.js";
 const terminal = ["SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT"] as const;
+export async function expireCloudLogs(now = new Date()) {
+  if (!r2.configured()) return {expired:0};
+  const where = {status:{in:[...terminal]},endedAt:{lt:new Date(now.getTime()-90*86400000)},logs:{none:{}},events:{some:{type:"logs.retained"}},
+    effects:{some:{kind:"archive",status:{in:["SUCCEEDED","EXPIRING"]}}},OR:[{runtime:null},{runtime:{state:"STOPPED"}}]};
+  const candidates=await db.deployment.findMany({where,select:{id:true,events:{where:{type:"logs.retained"},take:1,orderBy:{sequence:"desc"},select:{payload:true}}},take:10,orderBy:{endedAt:"asc"}});
+  let expired=0;
+  for(const candidate of candidates){
+    const proof=candidate.events[0]?.payload as {sha256?:unknown;lineCount?:unknown}|undefined;
+    if(typeof proof?.sha256!=="string" || !/^[a-f0-9]{64}$/.test(proof.sha256) || !Number.isInteger(proof.lineCount) || Number(proof.lineCount)<1) continue;
+    // Recheck current eligibility before marking; only the fixed log object expires.
+    const claim=await db.deploymentEffect.updateMany({where:{deploymentId:candidate.id,kind:"archive",status:{in:["SUCCEEDED","EXPIRING"]},deployment:where},data:{status:"EXPIRING"}});
+    if(claim.count!==1) continue;
+    // DeleteObject is idempotent. A failed deletion remains EXPIRING for a later retry.
+    await r2.expireLogArchive(candidate.id);
+    await db.$transaction(async tx=>{
+      const done=await tx.deploymentEffect.updateMany({where:{deploymentId:candidate.id,kind:"archive",status:"EXPIRING"},data:{status:"EXPIRED"}});
+      if(done.count) await tx.deploymentEvent.create({data:{deploymentId:candidate.id,type:"logs.archive-expired",payload:{days:90}}});
+    });
+    expired++;
+  }
+  return {expired};
+}
 export async function retainLogs(now = new Date()) {
   if (!r2.configured()) return { compacted: 0 };
   const cutoff = new Date(now.getTime() - 30 * 86400000);
@@ -31,7 +53,7 @@ export class LogRetentionService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   private busy = false;
   onModuleInit() {
-    const run = async () => { if (this.busy) return; this.busy = true; try { await retainLogs(); } catch { console.error("[retention] failed; logs preserved unless archive verification succeeded"); } finally { this.busy = false; } };
+    const run = async () => { if (this.busy) return; this.busy = true; try { await retainLogs(); await expireCloudLogs(); } catch { console.error("[retention] failed; inspect archive/expiry status before retrying"); } finally { this.busy = false; } };
     void run(); this.timer = setInterval(() => void run(), 6 * 3600000);
   }
   onModuleDestroy() { if (this.timer) clearInterval(this.timer); }

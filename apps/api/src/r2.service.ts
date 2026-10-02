@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createHash } from "node:crypto";
 
@@ -56,7 +56,12 @@ export class R2Service {
       }
       groups.push({ prefix, count, bytes, truncated });
     }
-    return { configured: true, checkedAt: new Date().toISOString(), groups, deletionEnabled: false };
+    return { configured: true, checkedAt: new Date().toISOString(), groups, deletionEnabled: false, archiveRetentionDays:90 };
+  }
+  async expireLogArchive(deploymentId: string) {
+    if (!/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(deploymentId)) throw new Error("Invalid archive deployment ID");
+    if (!this.configured() || !this.client || !this.bucket) throw new Error("R2 is not configured");
+    await this.client.send(new DeleteObjectCommand({Bucket:this.bucket,Key:`deployments/${deploymentId}/logs.jsonl`}));
   }
 }
 

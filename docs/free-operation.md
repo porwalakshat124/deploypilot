@@ -37,8 +37,9 @@ worker availability and backup age. Render cold starts can delay responses.
 - Searchable database logs: 30 days after a deployment finishes. A full R2 upload
   and SHA-256 readback must succeed before compaction. Eligibility and row counts
   are checked again in a serializable transaction; history and audit events stay.
-- R2 log archives and encrypted offsite backups: retained for recovery. No bucket
-  lifecycle or cloud deletion is enabled; monitor storage usage as data grows.
+- R2 log archives: verified compacted archives expire after 90 days only when
+  their runtime is absent or stopped. Encrypted offsite backups remain preserved;
+  no blanket bucket lifecycle deletion is enabled. Monitor storage as data grows.
 - Local encrypted backups: 30 days, preserving at least seven newest copies, the
   newest restore-tested copy and copies without verified offsite receipts. The
   backup encryption key is never removed by retention.

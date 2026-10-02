@@ -3,6 +3,13 @@
 Status: internal checks performed; independent review is outstanding. This document
 does not certify the service or replace a review by someone outside implementation.
 
+October 2 dependency audit: production dependencies report no known advisories after
+pinning Next's PostCSS to 8.5.26, Nest's Multer to 2.4.0 and Prisma config's
+deepmerge-ts to 8.0.0. Prisma uses its ordinary configuration merger; schema
+generation, validation, type checks and CI exercise the compatibility override.
+CI rejects high-severity production dependency advisories. This registry audit
+does not prove the absence of vulnerabilities or replace independent review.
+
 Review source at the release commit and reproduce the role tests with two GitHub
 users, including organization installations when an organization is available.
 Examine AuthService, access.ts, teams.controller.ts, worker-auth.ts, webhook

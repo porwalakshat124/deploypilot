@@ -38,6 +38,8 @@ authenticated. Use ordinary migrate deploy for subsequent versioned SQL changes.
 
 Storage monitoring: `node scripts/storage-inventory.mjs` reads bounded R2 usage
 aggregates and Docker system df. Truncated groups are lower bounds, not full usage.
-No deletion is performed. Searchable logs/local backups already have 30-day
-retention; preserve rollback images and cloud archives until a reference-aware
-cloud retention policy is verified. Never use broad Docker prune or bucket purge.
+The inventory command performs no deletion. Searchable logs/local backups retain
+30 days. A separate API task expires verified compacted cloud log archives after
+90 days, only for terminal deployments with stopped/absent runtimes. Failed cloud
+deletions remain retryable and expired archives return 410. Backups and rollback
+images remain preserved. Never use broad Docker prune or bucket purge.

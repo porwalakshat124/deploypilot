@@ -17,5 +17,12 @@
   },
   "dependencies": {
     "@prisma/client": "6.19.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "next>postcss": "8.5.26",
+      "@nestjs/platform-express>multer": "2.4.0",
+      "@prisma/config>deepmerge-ts": "8.0.0"
+    }
   }
 }

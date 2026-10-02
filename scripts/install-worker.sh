@@ -10,7 +10,7 @@ for key in WORKER_API_URL WORKER_ID WORKER_TOKEN; do grep -Eq "^$key=.+" "$CONFI
 if grep -Eq '^(DATABASE_URL|DIRECT_URL|REDIS_URL|GITHUB_PRIVATE_KEY|OPENAI_API_KEY)=' "$CONFIG_PATH"; then echo "Worker config must not contain server credentials"; exit 1; fi
 if [ -e "$INSTALL_DIR" ]; then echo "Use a new installation directory; existing files are preserved"; exit 1; fi
 git clone --depth 1 --branch "$VERSION" "$REPO_URL" "$INSTALL_DIR"
-cp "$CONFIG_PATH" "$INSTALL_DIR/.env"
+sed '/^WORKER_VERSION=/d' "$CONFIG_PATH" > "$INSTALL_DIR/.env"
 chmod 600 "$INSTALL_DIR/.env"
 cd "$INSTALL_DIR"
 pnpm install --filter @deploypilot/worker... --frozen-lockfile

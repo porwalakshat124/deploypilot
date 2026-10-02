@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import "reflect-metadata";
 dotenv.config({ path: new URL("../../../.env", import.meta.url) });
-import { BadRequestException, Body, Controller, Get, Inject, Injectable, Module, NotFoundException, Param, Post, Req, Res, Sse, UnauthorizedException, ForbiddenException, Patch, Delete } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Get, Inject, Injectable, Module, NotFoundException, GoneException, Param, Post, Req, Res, Sse, UnauthorizedException, ForbiddenException, Patch, Delete } from "@nestjs/common";
 import { AuthService } from "./auth.service.js";
 export { AuthService } from "./auth.service.js";
 import { RepositoryLifecycleController } from "./repository-lifecycle.controller.js";
@@ -66,6 +66,7 @@ export class AppController {
     const deployment = await db.deployment.findFirst({ where: { id: deploymentId, repository: repositoryAccess(user.id) }, select: { id: true, status: true } });
     if (!deployment) throw new NotFoundException("Deployment not found");
     if (["RUNNING", "QUEUED"].includes(deployment.status)) throw new BadRequestException("Wait for the deployment to finish before archiving logs");
+    if (await db.deploymentEffect.findFirst({where:{deploymentId,kind:"archive",status:{in:["EXPIRING","EXPIRED"]}},select:{id:true}})) throw new GoneException("Log archive expired under the 90-day retention policy");
     if (!r2.configured()) throw new BadRequestException("R2 storage is not configured on the API");
     const logs = await db.deploymentLog.findMany({ where: { deploymentId }, orderBy: { sequence: "asc" }, take: 50001 });
     if (logs.length > 50000) throw new BadRequestException("Archive limit exceeded; use paginated export");
@@ -224,7 +225,7 @@ export class AppController {
       runtime: { select: { imageId: true, state: true } }, effects: { where: { kind: "archive" }, select: { status: true } }
     } });
     if (!deployment) throw new NotFoundException("Deployment not found");
-    return { version: 1, deploymentId: deployment.id, source: { repository: deployment.repository.fullName, commitSha: deployment.commitSha, branch: deployment.sourceBranch },
+    return { version: 1, deploymentId: deployment.id, status: deployment.status, source: { repository: deployment.repository.fullName, commitSha: deployment.commitSha, branch: deployment.sourceBranch },
       buildProfile: deployment.config, environment: deployment.environment, workerId: deployment.targetWorkerId, releaseKind: deployment.releaseKind, sourceDeploymentId: deployment.sourceDeploymentId,
       image: deployment.runtime?.imageId ? { id: deployment.runtime.imageId, location: "worker-local", runtimeState: deployment.runtime.state } : null,
       logArchive: { status: deployment.effects[0]?.status ?? "NOT_RECORDED" }, createdAt: deployment.createdAt,

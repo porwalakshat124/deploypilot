@@ -26,7 +26,9 @@ if (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
   git clone --depth 1 --branch $Version $RepoUrl $InstallDir
   if ($LASTEXITCODE) { throw "Unable to clone worker release" }
 }
-Copy-Item -LiteralPath $ConfigPath -Destination (Join-Path $InstallDir ".env") -Force
+# Release version comes from the installed worker, not a stale copied override.
+$config = $config -replace '(?m)^WORKER_VERSION=[^\r\n]*(\r?\n|$)', ''
+[IO.File]::WriteAllText((Join-Path $InstallDir '.env'), $config)
 $privateFile = Join-Path $InstallDir ".env"
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 icacls $privateFile /inheritance:r /grant:r ($identity + ":(F)") | Out-Null
