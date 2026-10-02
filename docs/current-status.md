@@ -21,6 +21,8 @@
 - Scoped artifact JSON records and API reference. Bounded operator R2 inventory
   works; monitored prefixes total 1,418,438 bytes. Docker images total 1.661 GB.
 - Dashboard/API readiness checks pass. Public app routing remains disabled.
+- Production dependency audit reports no known advisories after patched transitive
+  dependency overrides; CI rejects high-severity production advisories.
 
 ## Remaining launch work
 
