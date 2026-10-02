@@ -16,13 +16,14 @@ export default function DetailPage() {
   const [search, setSearch] = useState(""), [level, setLevel] = useState(""), [stage, setStage] = useState("");
   const [fromTime, setFromTime] = useState(""), [toTime, setToTime] = useState(""), [visibleLines, setVisibleLines] = useState(500);
   const [diagnosis, setDiagnosis] = useState<unknown>(null);
+  const [artifactRecord, setArtifactRecord] = useState("");
   const [refreshVersion, setRefreshVersion] = useState(0);
   const notify = useToast();
   useEffect(() => {
     const abort = new AbortController();
     let cursor = 0, refreshing = false, dirty = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    setDetail(null); setLogs([]); setDiagnosis(null); setMessage("");
+    setDetail(null); setLogs([]); setDiagnosis(null); setMessage(""); setArtifactRecord("");
     const refresh = async () => {
       if (refreshing || abort.signal.aborted) { dirty = true; return; }
       refreshing = true; dirty = false;
@@ -66,15 +67,19 @@ export default function DetailPage() {
     setBusy(true); setMessage("");
     try {
       const record = await apiRequest("/v1/deployments/" + deploymentId + "/artifacts");
-      const url = URL.createObjectURL(new Blob([JSON.stringify(record,null,2)], {type:"application/json"}));
-      const link = document.createElement("a"); link.href=url; link.download="deployment-" + deploymentId + "-artifacts.json"; link.click(); URL.revokeObjectURL(url);
-      notify("Artifact record downloaded.");
+      const json = JSON.stringify(record,null,2); setArtifactRecord(json);
+      const url = URL.createObjectURL(new Blob([json], {type:"application/json"}));
+      const link = document.createElement("a"); link.href=url; link.download="deployment-" + deploymentId + "-artifacts.json";
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      notify("Artifact record ready. Check your browser downloads, or copy the record below.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to download artifact record"); }
     finally { setBusy(false); }
   }
   if (!detail) return <><PageHeader eyebrow="Operations / Deployment" title="Deployment detail" /><Notice message={message} retry={() => setRefreshVersion(n => n + 1)} />{!message && <LoadingCards label="Loading deployment details" />}</>;
   return <><PageHeader eyebrow={"Operations / " + detail.repository.fullName} title={detail.commitSha.slice(0, 12)} description={detail.environment?.name + " · profile " + detail.config.branchRule + " v" + detail.config.version} action={<Badge status={detail.status} />} />
     <button className="dp-btn" disabled={busy} style={{marginBottom:16}} onClick={downloadArtifacts}>Download artifact record</button>
+    {artifactRecord && <Card style={{marginBottom:16}}><h2>Artifact record</h2><CopyButton value={artifactRecord} label="Copy artifact JSON" /><pre style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:320,overflow:"auto"}}>{artifactRecord}</pre></Card>}
     <Card><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{detail.canApprove && <button className="dp-btn dp-btn-primary" disabled={busy} onClick={() => action("approve")}>Approve deployment</button>}<CopyButton value={deploymentId} label="Copy deployment ID" /><CopyButton value={detail.commitSha} label="Copy commit" />{["QUEUED", "RUNNING"].includes(detail.status) && <button className="dp-btn dp-btn-danger" disabled={busy} onClick={() => action("cancel")}>Cancel</button>}{["FAILED", "CANCELLED", "TIMED_OUT"].includes(detail.status) && <button className="dp-btn" disabled={busy} onClick={() => action("retry")}>Retry</button>}{detail.status === "FAILED" && <button className="dp-btn dp-btn-primary" disabled={busy || !detail.diagnosisEnabled} onClick={() => action("diagnose")}>{detail.diagnosisEnabled ? "Diagnose failure" : "AI diagnosis disabled"}</button>}</div><Notice message={message} dismiss={() => setMessage("")} /><p role="status">{detail.approvalStatus === "PENDING" ? "Waiting for approval from a team administrator other than the requester." : connection}</p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 16 }}>{["dependencies", "tests", "docker-build", "health-check", "deploy"].map(name => { const s = detail.stages.find(s => s.name === name); return <div key={name}><p>{name}</p><Badge status={s?.status ?? "PENDING"} />{s?.startedAt && <p>{Math.max(0, Math.round(((s.endedAt ? Date.parse(s.endedAt) : Date.now()) - Date.parse(s.startedAt)) / 1000))}s</p>}</div>; })}</div>
     </Card><Card style={{ marginTop: 16 }}><h2>Logs · {connection}</h2><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}><input className="dp-input" style={{ maxWidth: 300 }} aria-label="Search logs" placeholder="Search logs" value={search} onChange={e => setSearch(e.target.value)} /><select className="dp-select" style={{ width: 170 }} aria-label="Log stage" value={stage} onChange={e => setStage(e.target.value)}><option value="">All stages</option>{[...new Set(logs.map(l => l.stage))].map(s => <option key={s}>{s}</option>)}</select><select className="dp-select" style={{ width: 140 }} aria-label="Log level" value={level} onChange={e => setLevel(e.target.value)}><option value="">All levels</option><option>info</option><option>error</option><option>warn</option></select><label className="dp-label">From<input className="dp-input" type="datetime-local" value={fromTime} onChange={e=>setFromTime(e.target.value)} /></label><label className="dp-label">To<input className="dp-input" type="datetime-local" value={toTime} onChange={e=>setToTime(e.target.value)} /></label><button className="dp-btn" disabled={!logs.length} onClick={download}>Download logs</button><button className="dp-btn" disabled={busy || ["QUEUED","RUNNING"].includes(detail.status)} onClick={async()=>{setBusy(true);setMessage("");try{const archive=await apiRequest<{downloadUrl:string}>("/v1/deployments/"+deploymentId+"/logs/archive",{method:"POST"});const link=document.createElement("a");link.href=archive.downloadUrl;link.rel="noreferrer";link.target="_blank";link.click();notify("Archive ready. Signed access expires shortly.");}catch(error){setMessage(error instanceof Error?error.message:"Unable to download archive");}finally{setBusy(false);}}}>Download R2 archive</button></div><pre className="dp-mono" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", background: "#080a0e", padding: 16, maxHeight: 520, overflow: "auto", fontSize: 12 }}>{filtered.slice(-visibleLines).map(l => <div key={l.sequence} style={{ color: l.level === "error" ? "var(--red)" : "#bdc8d8" }}>{l.sequence} [{l.stage}/{l.level}] {l.message}</div>)}{!logs.length && (["QUEUED","RUNNING"].includes(detail.status) ? "Waiting for worker output…" : detail.events.some(event=>event.type==="logs.retained") ? "Searchable logs expired after 30 days. Download the R2 archive above." : "No logs were recorded for this deployment.")}</pre>{filtered.length > visibleLines && <button className="dp-btn" onClick={()=>setVisibleLines(value=>value+500)}>Show 500 earlier lines ({filtered.length - visibleLines} hidden)</button>}{logs.length > 0 && !filtered.length && <Empty title="No matching logs" text="Try another search term, stage or level." />}</Card>
