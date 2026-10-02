@@ -4,6 +4,7 @@ import { HttpException, type ArgumentsHost } from "@nestjs/common";
 import { json, raw, type Request, type Response, type NextFunction } from "express";
 import { validOperationsCredential } from "./operations-alerts.js";
 import { randomUUID } from "node:crypto";
+import { clientAddress } from "./client-address.js";
 import { consumeRateLimit } from "./rate-limit.js";
 import { AppModule } from "./app.js";
 
@@ -22,9 +23,13 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   res.on("finish", () => console.log(JSON.stringify({ requestId, method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - start })));
   if (["/health", "/ready", "/health/ready"].includes(req.path)) return next();
   const worker = req.path.startsWith("/v1/workers/") && /\/(logs|stages|heartbeat|claim|status|complete|source|runtimes|runtime-commands|report)(\/|$)/.test(req.path);
-  const identity = req.headers.authorization ?? req.socket.remoteAddress ?? "unknown-peer";
-  void consumeRateLimit(worker ? "worker" : "request", identity, worker ? 6000 : 300).then(allowed => {
-    if (allowed) return next();
+  const peer = clientAddress(typeof req.headers["cf-connecting-ip"] === "string" ? req.headers["cf-connecting-ip"] : undefined, req.socket.remoteAddress, process.env.NODE_ENV === "production");
+  const credential = req.headers.authorization ?? peer;
+  void Promise.all([
+    consumeRateLimit(worker ? "worker-ip" : "request-ip", peer, worker ? 12000 : 1200),
+    consumeRateLimit(worker ? "worker" : "request", credential, worker ? 6000 : 300),
+  ]).then(([peerAllowed, credentialAllowed]) => {
+    if (peerAllowed && credentialAllowed) return next();
     res.setHeader("Retry-After", "60");
     res.status(429).json({ message: "Too many requests. Try again shortly.", requestId });
   }).catch(() => { res.status(503).json({ message: "Request protection temporarily unavailable", requestId }); });
