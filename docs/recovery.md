@@ -21,7 +21,12 @@ An additional hosted database drill on October 2 restored the verified encrypted
 backup into the previously empty deploypilot-recovery-test project. Application
 reads, both secret decryptions, Auth users/identities, RLS and Auth health passed.
 Managed Auth DDL/migrations were preserved and old sessions were not restored.
-GitHub provider configuration and a fresh login/tenant-access test remain pending.
+The dedicated recovery GitHub provider is configured. Fresh GitHub login passed
+for porwalakshat124 and pkmania124 with original application IDs preserved and
+foreign repository access denied. Both accounts completed sixty authenticated
+repository reads at concurrency five (p95 4.33s and 3.68s respectively). Test
+sessions were signed out; Email login is disabled on the recovery project.
+Evidence: docs/verification/recovery-login.json and recovery login screenshots.
 Evidence: docs/verification/hosted-recovery.json. The production project was unchanged.
 `node scripts/hosted-recovery.mjs <encrypted-file>` previews a restore;
 `--apply` permits writes only to the hardcoded recovery project while it is empty.

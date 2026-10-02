@@ -35,9 +35,10 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/callback') {
       const { data, error } = await client.auth.exchangeCodeForSession(url.searchParams.get('code') ?? '');
       if (error || !data.session) throw new Error('Fresh GitHub session failed');
-      const user = await auth.user({ headers: { authorization: 'Bearer ' + data.session.access_token } });
       const expected = ['7c8387f8-60a0-4ba8-8e96-af53ea972de8', '78b43222-840c-426b-82e0-2dda5da4daf3'];
-      if (!expected.includes(user.id)) throw new Error('Login did not preserve a restored application account');
+      const restored = await db.user.findUnique({where:{supabaseId:data.session.user.id},select:{id:true}});
+      if (!restored || !expected.includes(restored.id)) throw new Error('Login did not preserve a restored application account');
+      const user = await auth.user({ headers: { authorization: 'Bearer ' + data.session.access_token } });
       const allowed = await db.repository.findMany({ where: repositoryAccess(user.id), select: { id: true, ownerId: true, teamId: true } });
       const memberships = await db.teamMember.findMany({ where: { userId: user.id }, select: { teamId: true } });
       const teams = new Set(memberships.map(x => x.teamId));
@@ -67,10 +68,11 @@ const server = createServer(async (request, response) => {
     response.setHeader('Content-Type', 'text/html; charset=utf-8');
     response.end('<!doctype html><title>DeployPilot recovery verification</title><h1>DeployPilot recovery verification</h1><p>' + (url.pathname === '/verified' ? 'Fresh GitHub login, restored account and repository membership checks passed. The test session has been signed out. Production is unchanged.' : 'This private check uses the recovery Supabase project. Production is unchanged.') + '</p><p><a href="/login">Verify recovery GitHub login</a></p>');
   } catch {
+    if(url.pathname==='/callback') await client.auth.signOut().catch(()=>{});
     response.writeHead(400, { 'Content-Type': 'text/plain' }); response.end('Recovery login verification failed. No credentials are displayed.');
     console.log(JSON.stringify({ recoveryLoginVerified: false }));
   }
 });
 server.listen(3000, '127.0.0.1', () => console.log('Recovery login check ready at http://localhost:3000'));
-const stop = async () => { server.close(); await db.$disconnect(); process.exit(0); };
+const stop = async () => { server.close(); await client.auth.signOut().catch(()=>{}); await db.$disconnect(); process.exit(0); };
 process.on('SIGINT', stop); process.on('SIGTERM', stop);

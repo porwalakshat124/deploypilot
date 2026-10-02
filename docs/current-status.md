@@ -32,8 +32,12 @@ attempt was rejected and the organization repository remained absent from its
 DeployPilot account. Owner/member/pending-owner rules have regression coverage.
 Enterprise SSO testing remains deferred on the free budget.
 
-B. Fresh GitHub login and tenant access after hosted recovery, Storage binary-object
-recovery before storing files, and production capacity validation before scaling.
+B. Hosted database and fresh GitHub login recovery passed for both primary and
+pkmania124 accounts. Original account IDs were preserved; repository membership
+scope and foreign-repository denial passed, including 120 authenticated recovery
+reads at concurrency five. Recovery Email login is disabled. Storage binary-object
+recovery is required before storing files; production capacity validation is required
+before scaling beyond the current tested setup.
 An extended local Docker soak passed in 12.3 minutes: twelve builds in two lanes,
 720 health requests, twenty-four restarts and twelve stop/start checks. A fifteen-minute
 authenticated worker API soak completed 300 reads at concurrency five with zero errors
@@ -42,8 +46,8 @@ certify service capacity. Hosted database recovery into deploypilot-recovery-tes
 passed on October 2: 22 public tables, 2 users, 3 teams, 47 deployments, 2 Auth users
 and identities, and 2 decryptable environment secrets. Managed Auth DDL was retained,
 old sessions excluded, RLS enabled, and Auth health returned 200. The GitHub provider
-is not configured on that recovery project; fresh login and tenant access after
-recovery remain unverified. Production was not switched or modified.
+is now configured on that recovery project and fresh login/tenant checks passed.
+Production was not switched or modified.
 
 C. Independent security review and any resulting fixes. Internal checks and the
 review packet are complete, but they are not independent review.
