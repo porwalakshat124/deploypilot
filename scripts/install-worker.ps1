@@ -1,4 +1,4 @@
-param([string]$ConfigPath, [string]$InstallDir = (Join-Path $env:USERPROFILE ".deploypilot-worker"), [string]$Version = "main")
+param([string]$ConfigPath, [string]$InstallDir = (Join-Path $env:USERPROFILE ".deploypilot-worker"), [string]$Version = "main", [switch]$PrepareOnly)
 $ErrorActionPreference = "Stop"
 $RepoUrl = if ($env:DEPLOYPILOT_REPO_URL) { $env:DEPLOYPILOT_REPO_URL } else { "https://github.com/porwalakshat124/deploypilot.git" }
 foreach ($command in @("git","node","pnpm","docker")) {
@@ -16,6 +16,7 @@ $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 if ($InstallDir -eq [IO.Path]::GetPathRoot($InstallDir) -or $InstallDir -eq $env:USERPROFILE) { throw "Unsafe installation directory" }
 $TaskName = "DeployPilot Worker"
 if (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
+  if ($PrepareOnly) { throw "PrepareOnly requires a fresh installation directory" }
   Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   git -C $InstallDir fetch --depth 1 origin $Version
   if ($LASTEXITCODE) { throw "Unable to fetch worker release" }
@@ -47,11 +48,12 @@ $ErrorActionPreference = "Continue"
 Set-Location -LiteralPath "__DIRECTORY__"
 while ($true) {
   if ((Test-Path worker.log) -and (Get-Item worker.log).Length -gt 10485760) { Move-Item worker.log worker.previous.log -Force }
-  & "__NODE__" apps/worker/dist/main.js *>> worker.log
+  & "__NODE__" "__DIRECTORY__/apps/worker/dist/main.js" *>> worker.log
   Start-Sleep -Seconds 10
 }
 '@
 $runnerText.Replace("__DIRECTORY__", $InstallDir.Replace('"','')).Replace("__NODE__", $nodePath.Replace('"','')) | Set-Content -LiteralPath $runner
+if ($PrepareOnly) { Write-Host "Worker prepared without changing the running scheduled task."; return }
 $taskArgs = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $runner + '"'
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $taskArgs
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity

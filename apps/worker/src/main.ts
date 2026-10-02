@@ -6,6 +6,7 @@ import { DeploymentExecutor } from "./deployment-executor.js";
 import { sendHeartbeat } from "./heartbeat.js";
 import { WorkerApi } from "./worker-api.js";
 import { runProcess } from "./process-runner.js";
+import { checkControlPlane } from "./preflight.js";
 
 const apiUrl = process.env.WORKER_API_URL ?? "http://localhost:4000";
 const workerId = process.env.WORKER_ID;
@@ -17,6 +18,10 @@ if (endpoint.protocol !== "https:" && !(endpoint.protocol === "http:" && ["local
 if (endpoint.username || endpoint.password) throw new Error("Do not put credentials in WORKER_API_URL");
 await runProcess("docker", ["info", "--format", "{{.OSType}}"], 15000).then(result => { if (result.output.trim() !== "linux") throw new Error("The worker requires a Linux Docker engine"); });
 await runProcess("docker", ["buildx", "version"], 15000);
+if (process.argv.includes('--check')) {
+  await checkControlPlane(apiUrl,workerId,workerToken);
+  console.log('[worker] preflight passed; no job claimed');
+} else {
 const abort = new AbortController();
 process.once("SIGINT", () => abort.abort());
 process.once("SIGTERM", () => abort.abort());
@@ -31,7 +36,8 @@ async function heartbeat() {
   catch (error) { console.error("[worker] heartbeat failed", error instanceof Error ? error.message : "error"); }
   finally { heartbeating = false; }
 }
-await heartbeat();
+// Startup must authenticate successfully before an upgrade is considered healthy.
+await sendHeartbeat(apiUrl,workerId,workerToken,version);
 const runtimeTimer = setInterval(() => void monitor.tick(api).catch(() => console.error("[worker] runtime monitoring unavailable")), 15000);
 const heartbeatTimer = setInterval(() => void heartbeat(), 30000);
 console.log("[worker] ready; polling control plane for jobs");
@@ -44,3 +50,4 @@ try {
     await delay(5000, undefined, { signal: abort.signal }).catch(() => undefined);
   }
 } finally { clearInterval(heartbeatTimer); clearInterval(runtimeTimer); }
+}
