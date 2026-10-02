@@ -42,6 +42,11 @@ describe("GitHub source discovery", () => {
     await expect(github.assertInstallationOwner("42","99","provider-token")).rejects.toThrow("match");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+  it.each([{role:'member',state:'active'},{role:'admin',state:'pending'}])('rejects non-owner or pending organization membership %j',async membership=>{
+    fetchMock.mockResolvedValueOnce(json({account:{id:10,type:'Organization',login:'org'}})).mockResolvedValueOnce(json({id:99})).mockResolvedValueOnce(json(membership));
+    await expect(github.assertInstallationOwner('42','99','provider-token')).rejects.toThrow('active GitHub organization owner');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
   it("paginates branches and returns names, commits and protection", async () => {
     fetchMock.mockResolvedValueOnce(json([{ name: "feature/docker", commit: { sha: "a".repeat(40) }, protected: true }], { link: '<https://api.github.com/repos/owner/repo/branches?page=3>; rel="next"' }));
     expect(await github.listBranches("42", "owner/repo", 2)).toEqual({ branches: [{ name: "feature/docker", sha: "a".repeat(40), protected: true }], nextPage: 3 });

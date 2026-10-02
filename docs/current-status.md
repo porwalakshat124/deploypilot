@@ -26,18 +26,31 @@
 
 ## Remaining launch work
 
-A. A real GitHub organization installation/ownership/SSO test needs an organization;
-the owner has none. Team member roles and removal were tested with both accounts.
+A. DeployPilot-Test-Org owner installation and private repository import passed.
+pkmania124 was confirmed as an ordinary GitHub organization member; its import
+attempt was rejected and the organization repository remained absent from its
+DeployPilot account. Owner/member/pending-owner rules have regression coverage.
+Enterprise SSO testing remains deferred on the free budget.
 
 B. A functional hosted Supabase recovery on a second trusted project/host,
 Storage binary-object recovery before storing files, and broader user/build
-load/soak/capacity tests. The current checks do not certify service capacity.
+load/soak/capacity tests. Six real local Docker builds in two lanes, 360 health
+requests, twelve restarts and six stop/start checks passed. The latest 300 worker
+API reads passed with zero errors (p95 3.21 seconds). These bounded checks do not
+certify service capacity. Recovery still needs a valid privately configured
+RECOVERY_POSTGRES_URL for the existing recovery project; its HTTPS API URL is not
+a PostgreSQL connection string.
 
 C. Independent security review and any resulting fixes. Internal checks and the
 review packet are complete, but they are not independent review.
 
-D. Optional automatic worker-upgrade rollback, backup-object retention, and
-reference-aware Docker image cleanup. Searchable logs/local backups retain 30 days;
+D. Windows upgrade staging, authenticated read-only preflight and automatic task
+rollback are implemented; failed-start rollback was verified using a separate
+scheduled-task fixture. Backup-object expiration and reference-aware Docker image
+cleanup are implemented as explicit operator maintenance, with policy tests.
+Docker preview found zero candidates and deleted nothing. Remote expiration needs
+R2 credentials privately configured locally; live deletion remains unverified.
+Unix upgrade rollback remains manual. Searchable logs/local backups retain 30 days;
 verified compacted R2 logs expire after 90 days for stopped/absent runtimes. Backups
 and rollback images are preserved. Artifact signing/SBOM/registry uploads are
 future additions, not part of the current artifact record.
