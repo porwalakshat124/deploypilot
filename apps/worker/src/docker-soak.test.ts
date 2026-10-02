@@ -3,12 +3,14 @@ import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {DockerAdapter} from './docker-adapter.js';
 describe.skipIf(process.env.DOCKER_SOAK!=='1')('bounded local concurrent build/restart soak',()=>{
-  it('completes six builds across two lanes with repeated health requests and restarts',async()=>{
+  it('completes bounded builds across two lanes with repeated health requests and restarts',async()=>{
+    const cycles=Number(process.env.DOCKER_SOAK_CYCLES??3);
+    if(!Number.isInteger(cycles)||cycles<3||cycles>6)throw new Error('Soak cycles must be between three and six per lane');
     const profile={strategy:'DOCKERFILE' as const,timeoutSeconds:180,port:3000,healthcheckPath:'/health',requiredSecretNames:[]};
     const policy={timeoutSeconds:180,memoryLimitMb:512,cpuLimit:1,pidsLimit:128,networkMode:'bridge' as const};
     const context=fileURLToPath(new URL('./fixtures/healthy',import.meta.url));
     await Promise.all(Array.from({length:2},async()=>{
-      for(let cycle=0;cycle<3;cycle++) {
+      for(let cycle=0;cycle<cycles;cycle++) {
         const docker=new DockerAdapter(),name='deploypilot-soak-'+randomUUID();
         try {
           await docker.build(name,context,profile,policy);
@@ -26,5 +28,5 @@ describe.skipIf(process.env.DOCKER_SOAK!=='1')('bounded local concurrent build/r
         } finally {await docker.cleanup(name,name);}
       }
     }));
-  },600000);
+  },1200000);
 });
