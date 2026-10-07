@@ -9,7 +9,8 @@ on each operation; a previous token does not preserve removed team access.
 | Area | Routes | Access |
 | --- | --- | --- |
 | Health | GET /health, /health/ready | Public; ready includes dependency readiness |
-| GitHub import | GET /v1/github/installation; GET /v1/github/installations/:id/repositories | Verified GitHub user and authorized installation |
+| GitHub discovery | GET /v1/github/installation; GET /v1/github/installations/:id/available-repositories | Verified user/owner and installation; lists permitted repositories without importing |
+| GitHub import | POST /v1/github/installations/:id/repositories with repositoryIds; legacy GET /v1/github/installations/:id/repositories synchronizes all permitted repositories | Verified owner and installation/team binding; legacy GET performs synchronization |
 | Repositories | GET /v1/repositories; GET /v1/repositories/:id/setup, /branches, /dockerfiles | Member read; setup includes canDeploy |
 | Build profiles | POST /v1/repositories/:id/configs | Developer/admin/owner; immutable versions |
 | Environments/secrets | POST /v1/repositories/:id/environments; GET/POST/DELETE /v1/environments/:id/secrets | Administrator/owner; secret values never returned |
@@ -23,6 +24,8 @@ on each operation; a previous token does not preserve removed team access.
 | Workers | POST /v1/repositories/:id/workers/register; GET /v1/repositories/:id/workers | Administrator/owner for credentials; separate repository-scoped worker bearer |
 | Worker transport | POST /v1/workers/:id/heartbeat, /jobs/claim; deployment source/stage/log/complete routes | Matching unexpired/unrevoked worker credential; never user JWT |
 | Operator storage | GET /v1/operations/storage | Dedicated operations token; bounded R2 aggregate inventory, no object keys or deletion |
+| AI support | GET /v1/ai/status; POST /v1/ai/chat | Verified GitHub user; bounded conversation and shared durable AI quota |
+| Failure diagnosis | POST /v1/deployments/:id/diagnose | Deploy role, failed deployment; bounded redacted Groq evidence and shared AI quota |
 
 Cross-tenant resources return 404. Invalid input returns 400; missing/invalid
 authentication returns 401. Request limits return 429 and infrastructure failures

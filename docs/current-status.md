@@ -1,68 +1,43 @@
-# Current status — October 2, 2026
+# Current status — October 7, 2026
 
-## Completed and verified
+## Public beta scope
 
-- GitHub repository discovery fixed and verified for the second account.
-- Live invitation acceptance with matching GitHub identity, viewer read access and
-  API rejection of profile writes, developer profile save, then membership removal
-  and former-member deployment read denial.
-  The test repository remains in the smoke team; its temporary worker is revoked
-  and runtime stopped. No invitation email was sent.
-- Prisma datamodel parity and all six existing SQL migrations baselined without
-  replaying SQL. Migration metadata denies anon/authenticated read access.
-- Encrypted Auth/public/Storage metadata backup, verified R2 copies and isolated
-  PostgreSQL recovery of Auth users/identities, application rows, RLS and key.
-- Real Docker build/health/stop/start/restart, BuildKit secret mount and absence of
-  that mount in the resulting runtime. Output suppression and runtime/build secret
-  separation have regression coverage. Secret profiles are excluded from previews.
-- Worker 1.3 running on the existing free Windows host with old checkout preserved.
-- 300 authenticated worker API reads, concurrency five, zero errors; p50 2.32s,
-  p95 4.19s. Full Node 22 CI passed before deployment.
-- Scoped artifact JSON records and API reference. Bounded operator R2 inventory
-  works; monitored prefixes total 1,418,438 bytes. Docker images total 1.661 GB.
-- Dashboard/API readiness checks pass. Public app routing remains disabled.
-- Production dependency audit reports no known advisories after patched transitive
-  dependency overrides; CI rejects high-severity production advisories.
+The owner approved the public Vercel dashboard with team-owned Docker workers. GitHub is the only login method. The dashboard is available at https://deploypilot-web.vercel.app; the API is hosted on Render and database/Auth on Supabase.
 
-## Remaining launch work
+Application containers use worker-local addresses. Teams provide dedicated machines, Docker and availability. No managed compute, automatic public app URLs or stable traffic switching is included.
 
-A. DeployPilot-Test-Org owner installation and private repository import passed.
-pkmania124 was confirmed as an ordinary GitHub organization member; its import
-attempt was rejected and the organization repository remained absent from its
-DeployPilot account. Owner/member/pending-owner rules have regression coverage.
-Enterprise SSO testing remains deferred on the free budget.
+## Completed
 
-B. Hosted database and fresh GitHub login recovery passed for both primary and
-pkmania124 accounts. Original account IDs were preserved; repository membership
-scope and foreign-repository denial passed, including 120 authenticated recovery
-reads at concurrency five. Recovery Email login is disabled. Storage binary-object
-recovery is required before storing files; production capacity validation is required
-before scaling beyond the current tested setup.
-An extended local Docker soak passed in 12.3 minutes: twelve builds in two lanes,
-720 health requests, twenty-four restarts and twelve stop/start checks. A fifteen-minute
-authenticated worker API soak completed 300 reads at concurrency five with zero errors
-(p50 3.12 seconds, p95 5.88 seconds). These bounded checks do not
-certify service capacity. Hosted database recovery into deploypilot-recovery-test
-passed on October 2: 22 public tables, 2 users, 3 teams, 47 deployments, 2 Auth users
-and identities, and 2 decryptable environment secrets. Managed Auth DDL was retained,
-old sessions excluded, RLS enabled, and Auth health returned 200. The GitHub provider
-is now configured on that recovery project and fresh login/tenant checks passed.
-Production was not switched or modified.
+- GitHub-only sign-in and account switching; App installation discovery and searchable repository selection/import.
+- Team invitations, viewer/developer access checks and removal. Live two-account testing confirmed former-member denial and role restrictions.
+- GitHub organization owner import and ordinary-member denial tested using the fixture organization. Enterprise SSO is deferred.
+- Immutable Docker builds, HTTP health checks, ordered logs, cancellation, retry, deadlines and stale-worker recovery.
+- Versioned build profiles, environment policy/approvals, encrypted runtime secrets and BuildKit build secrets.
+- Runtime stop/start/restart, promotion and recorded-image rollback on the original worker.
+- Eligible PR previews and signed GitHub installation/repository lifecycle events.
+- Scoped artifact JSON/export and API documentation.
+- Durable provider outbox; optional R2 archives, Resend notifications, bounded storage inventory and retention.
+- Windows worker 1.3 setup and staged upgrade with failed-start task rollback.
+- Encrypted application/Auth/Storage metadata backup, migration baseline and hosted recovery with fresh GitHub login for both test accounts. Storage binary files were not in use during that drill.
+- Independent UptimeRobot monitoring and local operational/backup tools.
+- Groq support chat and failure diagnosis enabled and verified live. Shared durable minute/day limits apply; there is no paid fallback.
+- Public-page sitemap/robots, titles/descriptions, H1 structure, canonicals and JSON-LD. Private routes use noindex headers. Google ownership verification and a successful homepage live crawl are recorded.
 
-C. Independent security review and any resulting fixes. Internal checks and the
-review packet are complete, but they are not independent review.
+## Validation boundaries
 
-D. Windows upgrade staging, authenticated read-only preflight and automatic task
-rollback are implemented; failed-start rollback was verified using a separate
-scheduled-task fixture. Backup-object expiration and reference-aware Docker image
-cleanup are implemented as explicit operator maintenance, with policy tests.
-Docker preview found zero candidates and deleted nothing. Remote expiration needs
-R2 credentials privately configured locally; live deletion remains unverified.
-Unix upgrade rollback remains manual. Searchable logs/local backups retain 30 days;
-verified compacted R2 logs expire after 90 days for stopped/absent runtimes. Backups
-and rollback images are preserved. Artifact signing/SBOM/registry uploads are
-future additions, not part of the current artifact record.
+Node 22 CI includes dependency audit, migration/tenancy/atomic quota checks, unit tests, builds and real Docker verification. The Groq/SEO release passed CI and live provider/metadata checks.
 
-E. Public application routing/domain setup remains blocked by the no-domain choice.
-Vercel hosts the dashboard; team workers build/run apps locally. Wider public
-launch still needs the owner's explicit approval after the launch gates pass.
+Earlier bounded verification included twelve local builds, 720 HTTP checks, twenty-four restarts and twelve stop/start checks over 12.3 minutes, plus a fifteen-minute worker API soak with 300 reads at concurrency five and no errors. Hosted recovery preserved account IDs and verified tenant-scoped reads. These results do not certify unlimited capacity or adversarial isolation.
+
+## Remaining work
+
+1. Independent security review and fixes identified by that reviewer.
+2. Broader capacity/load testing before increasing users or build concurrency beyond the tested setup.
+3. Storage object-byte backup/recovery before enabling file storage, plus recurring recovery and maintenance drills.
+4. Google search processing: the sitemap was submitted but its initial read failed despite HTTP 200 valid XML. Manual homepage indexing hit Google's daily quota. The owner asked to leave sitemap troubleshooting for later; Google indexing/rankings are not claimed complete.
+
+## Optional future features
+
+Public application ingress/TLS/traffic switching; enterprise SSO; shared registry, signed artifacts and SBOMs; managed workers; Unix automatic upgrade rollback. These are separate from the current dashboard beta.
+
+Offsite backup ciphertext requires the original backup key. Keeping the only key copy on this PC remains the owner's chosen recovery limitation. Worker isolation requires separate trusted team hosts; a shared Docker daemon is not a hardened multi-tenant sandbox.
