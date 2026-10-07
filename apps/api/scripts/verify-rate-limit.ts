@@ -12,9 +12,14 @@ try {
   assert.equal(await consumeRateLimit("fixture-other", identity, 5), true, "scope isolation");
   assert.equal(await consumeRateLimit("fixture", identity + "other", 5), true, "identity isolation");
   assert.equal(await consumeRateLimit("fixture", identity, 5), false, "limit persists across calls");
-  console.log("PASS: shared atomic rate limiting, concurrency and identity/scope isolation");
+  const daily = await Promise.all(Array.from({length:10},()=>consumeRateLimit("fixture-daily",identity,3,"day")));
+  assert.equal(daily.filter(Boolean).length,3,"daily limit is atomic across concurrent requests");
+  const bucket = await db.rateLimitBucket.findFirstOrThrow({where:{key:rateLimitKey("fixture-daily",identity)}});
+  assert.equal(bucket.windowStart.getUTCHours(),0,"daily window begins at midnight UTC");
+  assert.equal(bucket.expiresAt.getTime()-bucket.windowStart.getTime(),172800000,"daily bucket survives the full daily window");
+  console.log("PASS: shared atomic minute/day rate limiting, concurrency and identity/scope isolation");
 } finally {
-  const keys = [rateLimitKey("fixture", identity), rateLimitKey("fixture-other", identity), rateLimitKey("fixture", identity + "other")];
+  const keys = [rateLimitKey("fixture", identity), rateLimitKey("fixture-other", identity), rateLimitKey("fixture", identity + "other"),rateLimitKey("fixture-daily",identity)];
   await db.rateLimitBucket.deleteMany({ where: { key: { in: keys } } });
   await db.$disconnect();
 }
