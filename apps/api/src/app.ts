@@ -27,6 +27,8 @@ import { PrismaService } from "./prisma.service.js";
 import { createWorkerToken, hashWorkerToken, workerTokenMatches, workerIsActive } from "./worker-auth.js";
 import { branchFromRef, verifyGitHubSignature, type PushPayload } from "./github-webhook.js";
 import { DiagnosisService } from "./diagnosis.service.js";
+import { ChatService } from "./chat.service.js";
+import { ChatController } from "./chat.controller.js";
 import { validateProfile } from "./build-profile.js";
 import { appendLog, appendLogs, finishDeployment } from "./execution-state.js";
 import { r2 } from "./r2.service.js";
@@ -56,6 +58,7 @@ export class AppController {
       { name: "PostgreSQL", configured: Boolean(process.env.DATABASE_URL), description: "Deployment records and durable job polling" },
       { name: "Cloudflare R2", configured: r2.configured(), description: "Archived logs and signed downloads" },
       { name: "Resend", configured: Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL), description: "Deployment result notifications" },
+      { name: "Groq AI chat", configured: process.env.AI_CHAT_ENABLED === "true" && Boolean(process.env.GROQ_API_KEY), description: "Free-tier support chat with per-user and shared limits" },
       { name: "OpenAI", configured: process.env.AI_DIAGNOSIS_ENABLED !== "false" && Boolean(process.env.OPENAI_API_KEY), description: process.env.AI_DIAGNOSIS_ENABLED === "false" ? "AI diagnosis is disabled for this workspace" : "Evidence-based failure diagnosis" }
     ], failedDeliveries, workerProtocol: "HTTPS polling", providerDelivery: "Configuration status does not prove successful delivery" };
   }
@@ -639,5 +642,5 @@ export class AppController {
   }
 }
 
-@Module({ controllers: [OperationsAlertController, RepositoryLifecycleController, AppController, TeamsController, OperationsController, SecretsController, RuntimeController, ReleasesController], providers: [LogRetentionService, OperationsAlerts, AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
+@Module({ controllers: [ChatController, OperationsAlertController, RepositoryLifecycleController, AppController, TeamsController, OperationsController, SecretsController, RuntimeController, ReleasesController], providers: [ChatService, LogRetentionService, OperationsAlerts, AuthService, GitHubService, PrismaService, DiagnosisService, NotificationsService, DeploymentEffectsService] })
 export class AppModule {}

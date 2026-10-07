@@ -6,7 +6,7 @@ export function redactLog(message: string) {
   return message
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]")
     .replace(/\bBearer\s+[^\s,;"']+/gi, "Bearer [REDACTED]")
-    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{16,})\b/g, "[REDACTED]")
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|gsk_[A-Za-z0-9_]{16,}|sk-[A-Za-z0-9_-]{16,})\b/g, "[REDACTED]")
     .replace(/(https?:\/\/|postgres(?:ql)?:\/\/|rediss?:\/\/)([^\s/@]+)@/gi, "$1[REDACTED]@")
     .replace(secretAssignment, (_match, name) => `${name}=[REDACTED]`);
 }
