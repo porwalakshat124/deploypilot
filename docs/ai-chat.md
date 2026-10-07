@@ -23,4 +23,4 @@ GET /v1/ai/status and POST /v1/ai/chat require the existing verified GitHub sess
 POST accepts {messages:[{role:"user",content:"How do I import a repository?"}]}.
 Client-supplied identity and system/tool messages are not accepted as authority.
 The assistant provides suggestions and never performs deployment actions.
-Automated OpenAI diagnosis remains disabled separately.
+Failure diagnosis uses Groq separately through the deployment's Diagnose failure action. It shares the chat quota and sends bounded redacted evidence; see `ai-diagnosis.md`.
