@@ -35,6 +35,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --prod --audit-level high
+      - run: pnpm docs:check
       - run: DATABASE_URL=postgresql://x:x@localhost:5432/x DIRECT_URL=postgresql://x:x@localhost:5432/x pnpm --filter @deploypilot/database validate
       - run: pnpm --filter @deploypilot/database exec prisma db execute --schema schema.prisma --file ci-roles.sql
       - run: pnpm --filter @deploypilot/database exec prisma migrate deploy --schema schema.prisma

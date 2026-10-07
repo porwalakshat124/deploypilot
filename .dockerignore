@@ -9,3 +9,5 @@
 .pnpm-store
 coverage
 *.log
+.local
+docs/verification

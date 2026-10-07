@@ -33,7 +33,7 @@ button { cursor:pointer; }
 .dp-notice > span { flex:1; min-width:0; }.dp-notice-error { border-color:#71303e; background:#28151e; color:#ffb3bf; }.dp-notice-success { border-color:#326d50; background:#12261c; color:#a2f0c6; }.dp-notice-info { border-color:#394877; color:#c2cbff; }
 .dp-notice-close { border:0; background:transparent; color:inherit; border-radius:6px; font-size:22px; padding:4px 8px; }
 .dp-toasts { position:fixed; z-index:60; right:24px; bottom:24px; width:min(420px,calc(100vw - 32px)); display:grid; gap:10px; pointer-events:none; }.dp-toasts .dp-notice { margin:0; box-shadow:0 8px 30px #0007; pointer-events:auto; }
-:where(button,a,input,select,textarea):focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+:where(button,a,input,select,textarea,summary):focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
 .dp-skip-link { position:fixed; top:8px; left:8px; z-index:100; transform:translateY(-160%); background:var(--green); color:#07110d; padding:12px 18px; border-radius:8px; font-weight:700; }.dp-skip-link:focus { transform:none; }
 @media (prefers-reduced-motion:reduce) { .dp-skeleton { animation:none; } *,*::before,*::after { scroll-behavior:auto!important; transition:none!important; } }
 @media (max-width:520px) { .dp-toasts { right:16px; bottom:16px; }.dp-notice { flex-wrap:wrap; } }

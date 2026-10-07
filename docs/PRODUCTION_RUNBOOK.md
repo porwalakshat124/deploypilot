@@ -20,7 +20,7 @@ Three formerly abandoned RUNNING jobs were recovered as TIMED_OUT during the rol
 
 Terminal completion creates durable archive, email and GitHub-status delivery records. The API processes them every ten seconds, retries failures up to five times with backoff, and recovers abandoned claims. Provider errors do not invalidate a healthy deployment. Missing optional configuration produces SKIPPED delivery records. Resend uses a deployment/status idempotency key.
 
-R2 needs R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET. Resend needs RESEND_API_KEY and RESEND_FROM_EMAIL with a verified sender. OpenAI needs OPENAI_API_KEY and optionally OPENAI_MODEL. Provider values stay private on Render. Inspect DeploymentEffect for delivery state and redacted failure summaries.
+R2 needs R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET. Resend needs RESEND_API_KEY and RESEND_FROM_EMAIL with a verified sender. Groq needs GROQ_API_KEY, GROQ_MODEL and explicit AI_CHAT_ENABLED/AI_DIAGNOSIS_ENABLED flags. Chat and diagnosis share durable quotas with no paid fallback. Provider values stay private on Render. Inspect DeploymentEffect for delivery state and redacted failure summaries.
 
 ## Runtime boundary
 
@@ -34,4 +34,4 @@ Docker runtime-socket repair during this release preserved the old runtime direc
 
 ## Launch preparation
 
-See launch-gate.md for the current recovery, rate-limit, alert, retention and public-launch boundary. Public routing remains blocked at the owner's request. Operator configuration lives in the ignored, ACL-protected .env.operations; configure-operations.mjs selects the single existing account and installed worker. If the database has multiple users, select the authorized operator explicitly rather than guessing. Never upload backup.key with the encrypted offsite files.
+See [current status](current-status.md) and [beta launch scope](launch-gate.md) for operating boundaries. The public dashboard beta is approved; application routing remains outside this no-domain setup. Operator configuration lives in the ignored, ACL-protected .env.operations; configure-operations.mjs selects the single existing account and installed worker. If the database has multiple users, select the authorized operator explicitly rather than guessing. Never upload backup.key with encrypted offsite files.

@@ -130,12 +130,14 @@ Preview endpoints remain worker-local.
 Migration 0005 adds lifecycle fields and runtime tables with RLS/browser access
 revoked. CI also verifies archival access and ownership/command lease invariants.
 
-## Features still requiring further implementation
+## Current beta and remaining work
 
-Public routing/TLS and traffic switching; artifact and log retention;
-distributed rate limits; backup restore drills and external alerting. Validate
-organization installation and team access with real second-user accounts before
-opening the service broadly. AI remains disabled at the owner's request.
+The public dashboard beta is approved with team-owned workers. Log retention,
+durable shared rate limits, hosted recovery and independent uptime monitoring are
+implemented; scoped organization and two-account role tests passed. Groq chat and
+failure diagnosis are enabled with shared free quotas. Independent security review
+and broader capacity validation remain. Public routing/TLS and traffic switching
+are optional separate work. See [current status](current-status.md).
 
 ## Database pool tuning
 

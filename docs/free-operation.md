@@ -10,8 +10,9 @@ For a new account, connect DeployPilot(AP) and select repositories on GitHub;
 return and load them. Personal installation discovery verifies the immutable
 GitHub account ID. Organizations still require an owner and a team administrator.
 
-Choose Configure and deploy. A supported Dockerfile/build profile, environment
-and connected version 1.2 Docker worker are required. Repository import does not
+After loading, search/select the repositories to import. Choose Configure and deploy.
+A supported Dockerfile/build profile, environment and capable Docker worker are required
+(current release 1.3; build secrets require 1.3). Repository import does not
 provide automatic configuration for every framework or free cloud compute.
 Each team supplies its own worker; the existing Windows worker is free to operate
 but requires the PC, Docker and Internet to stay available. Containers currently
@@ -56,6 +57,9 @@ The bounded read-only load check issued 120 authenticated worker API requests at
 concurrency 5: all succeeded, p50 2289 ms and p95 2758 ms. This checks modest
 concurrency, not production capacity for an arbitrary number of users.
 
-Second-account testing uses pkmania124 with private user sign-in. Real account,
-team role, removal and GitHub App authorization checks must be completed before
-claiming multi-user launch readiness. No public launch is performed here.
+Scoped second-account/team-role/removal checks and organization owner/member tests
+passed, and the owner approved the public dashboard beta. Independent security review
+and broader capacity validation remain. Groq chat/diagnosis share bounded application
+and provider quotas with no paid fallback. Free provider plans have availability and
+quota constraints; hardware, electricity and internet remain the team's responsibility.
+See [current status](current-status.md).

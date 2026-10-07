@@ -18,10 +18,9 @@ In Dashboard > Workers, select the repository and register a worker. Store only 
     WORKER_API_URL=https://your-api.example.com
     WORKER_ID=the-registered-worker-id
     WORKER_TOKEN=the-one-time-token
-    WORKER_VERSION=1.2.0
     WORKER_BUILD_NETWORK=bridge
 
-Do not copy the API server's environment file to the worker. The remote agent does not need database, Redis, GitHub App, Supabase service, or OpenAI keys. HTTP is accepted only for a loopback API address. Keep worker credentials out of command history and source control.
+Use `.env.worker.example` for a separate worker checkout/config. The installed release reports its own version (currently 1.3.0); do not keep a stale WORKER_VERSION override. Do not copy the API server's environment file to the worker. The remote agent does not need database, Redis, GitHub App, Supabase service, Groq or other provider keys. HTTP is accepted only for a loopback API address. Keep worker credentials out of command history and source control.
 
 Start the compiled agent:
 
@@ -106,7 +105,7 @@ The API marks abandoned running jobs failed after heartbeat loss, or timed out a
 
 On an uncertain completion response, the worker preserves the candidate container rather than deleting a container that may already be recorded successful. Inspect the run and job-specific container manually before retrying.
 
-Successful containers remain available for ingress and inspection. There is no automatic rollout replacement, public ingress, successful-image retention, or rollback. Clean up only explicitly identified old job resources after traffic is no longer using them; do not prune the entire host.
+Successful containers remain available for inspection. Runtime stop/start/restart and rollback to a recorded image are supported on capable workers; rollback requires the image on its original worker. Promotion rebuilds the recorded commit in the target environment. There is no automatic traffic switching or public ingress. Use bounded maintenance previews rather than pruning the entire host. See [multi-user operations](multi-user-operations.md) and [maintenance](maintenance.md).
 
 ## Troubleshooting
 

@@ -7,6 +7,9 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "docs:check": "node scripts/check-docs.mjs",
+    "db:validate": "node --env-file=.env node_modules/prisma/build/index.js validate --schema packages/database/schema.prisma",
+    "db:migrate": "node --env-file=.env node_modules/prisma/build/index.js migrate deploy --schema packages/database/schema.prisma",
     "dev": "pnpm --parallel --filter @deploypilot/api --filter @deploypilot/worker --filter @deploypilot/web dev"
   },
   "engines": {
