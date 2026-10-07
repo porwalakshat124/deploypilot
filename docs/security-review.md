@@ -3,7 +3,9 @@
 Status: internal checks performed; independent review is outstanding. This document
 does not certify the service or replace a review by someone outside implementation.
 
-October 2 dependency audit: production dependencies report no known advisories after
+October 7 dependency audit: refreshed patches for proxy-addr 2.0.8, Sharp 0.35.5
+and source-map-js 1.2.2 address advisories published since the October 2 check.
+The earlier check reported no known advisories after
 pinning Next's PostCSS to 8.5.26, Nest's Multer to 2.4.0 and Prisma config's
 deepmerge-ts to 8.0.0. Prisma uses its ordinary configuration merger; schema
 generation, validation, type checks and CI exercise the compatibility override.
@@ -50,4 +52,6 @@ OAuth redirects, SSRF and Docker host egress, malicious Dockerfiles, build-secre
 exfiltration, replayed/stale worker completion, provider retries, restore custody,
 rate-limit bypass, dependency vulnerabilities and resource exhaustion. Workers
 must run on separate team-owned hosts; a shared Docker daemon is not a strong
-untrusted multi-tenant boundary. Public routing and wider launch remain blocked.
+untrusted multi-tenant boundary. The owner authorized a public dashboard beta on
+October 7 with team-owned workers. Automatic public app routing is outside this
+launch. Independent review remains outstanding before broader production use.
