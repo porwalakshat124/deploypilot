@@ -86,8 +86,7 @@ export class AppController {
     return this.github.personalInstallation(await this.auth.githubId(request));
   }
 
-  @Get("/v1/github/installations/:installationId/repositories")
-  async repositories(@Req() request: Request, @Param("installationId") installationId: string) {
+  private async repositoryImportSource(request: Request, installationId: string) {
     const user = await this.auth.user(request);
     const teamId = typeof request.query.teamId === "string" ? request.query.teamId : undefined;
     const account = await this.github.assertInstallationOwner(installationId, await this.auth.githubId(request), typeof request.headers["x-github-token"] === "string" ? request.headers["x-github-token"] : undefined);
@@ -96,11 +95,34 @@ export class AppController {
     const existingInstallation = await db.gitHubInstallation.findUnique({ where: { installationId } });
     if (existingInstallation && (existingInstallation.teamId ? existingInstallation.teamId !== teamId : existingInstallation.userId !== user.id)) throw new ForbiddenException("Installation is connected to another account or team");
     const githubRepositories = await this.github.listRepositories(installationId);
+    return { user, teamId, account, githubRepositories };
+  }
+
+  @Get("/v1/github/installations/:installationId/available-repositories")
+  async availableRepositories(@Req() request: Request, @Param("installationId") installationId: string) {
+    const { user, githubRepositories } = await this.repositoryImportSource(request, installationId);
+    const connected = await db.repository.findMany({ where: repositoryAccess(user.id), select: { githubRepoId: true, archivedAt: true } });
+    const imported = new Set(connected.filter(repo => !repo.archivedAt).map(repo => repo.githubRepoId));
+    return { repositories: githubRepositories.map(repo => ({ id: String(repo.id), fullName: repo.full_name, defaultBranch: repo.default_branch, imported: imported.has(String(repo.id)) })).sort((a, b) => a.fullName.localeCompare(b.fullName)) };
+  }
+
+  @Post("/v1/github/installations/:installationId/repositories")
+  async importRepositories(@Req() request: Request, @Param("installationId") installationId: string, @Body() body: { repositoryIds?: unknown } = {}) {
+    if (!Array.isArray(body.repositoryIds) || !body.repositoryIds.length || body.repositoryIds.length > 10000 || body.repositoryIds.some(id => typeof id !== "string" || !/^\d+$/.test(id))) throw new BadRequestException("Select at least one valid GitHub repository");
+    return this.repositories(request, installationId, body.repositoryIds as string[]);
+  }
+
+  @Get("/v1/github/installations/:installationId/repositories")
+  async repositories(@Req() request: Request, @Param("installationId") installationId: string, selectedIds?: string[]) {
+    const { user, teamId, account, githubRepositories } = await this.repositoryImportSource(request, installationId);
+    const available = new Set(githubRepositories.map(repo => String(repo.id)));
+    if (selectedIds?.some(id => !available.has(id))) throw new BadRequestException("A selected repository is no longer accessible to the GitHub App. Reload the list and select again.");
+    const selected = selectedIds ? new Set(selectedIds) : available;
     const installation = await db.gitHubInstallation.upsert({ where: { installationId }, update: { accountLogin: account.accountLogin, revokedAt: null, suspendedAt: null }, create: { userId: user.id, teamId: account.organization ? teamId : null, installationId, accountLogin: account.accountLogin } });
-    for (const repo of githubRepositories) {
+    for (const repo of githubRepositories.filter(repo => selected.has(String(repo.id)))) {
       const existing = await db.repository.findUnique({ where: { githubRepoId: String(repo.id) } });
       if (existing && existing.installationId !== installation.id) throw new ForbiddenException("Repository is already connected through another installation");
-      await db.repository.upsert({ where: { githubRepoId: String(repo.id) }, update: { fullName: repo.full_name, defaultBranch: repo.default_branch }, create: { githubRepoId: String(repo.id), fullName: repo.full_name, defaultBranch: repo.default_branch, ownerId: user.id, teamId: account.organization ? teamId : null, installationId: installation.id } });
+      await db.repository.upsert({ where: { githubRepoId: String(repo.id) }, update: { fullName: repo.full_name, defaultBranch: repo.default_branch, ...(selectedIds ? { archivedAt: null } : {}) }, create: { githubRepoId: String(repo.id), fullName: repo.full_name, defaultBranch: repo.default_branch, ownerId: user.id, teamId: account.organization ? teamId : null, installationId: installation.id } });
     }
     await db.repository.updateMany({ where: { installationId: installation.id, githubRepoId: { notIn: githubRepositories.map(repo => String(repo.id)) } }, data: { archivedAt: new Date() } });
     return { repositories: await db.repository.findMany({ where: repositoryAccess(user.id), orderBy: { fullName: "asc" } }) };

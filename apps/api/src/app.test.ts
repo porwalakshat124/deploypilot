@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Request } from "express";
 const db = vi.hoisted(() => ({
-  repository: { findMany: vi.fn(), findFirst: vi.fn() },
+  repository: { findMany: vi.fn(), findFirst: vi.fn(), findUnique:vi.fn(), upsert:vi.fn(), updateMany:vi.fn() },
+  gitHubInstallation:{findUnique:vi.fn(),upsert:vi.fn()},
+  teamMember:{findFirst:vi.fn()},
   deployment: { create: vi.fn(), findFirst: vi.fn(), findMany:vi.fn(), groupBy:vi.fn() },
   deploymentEvent:{create:vi.fn()},
   deploymentEffect:{findFirst:vi.fn()},
@@ -14,8 +16,8 @@ vi.mock("@supabase/supabase-js", () => ({ createClient: () => ({ auth: { getUser
 import { AppController } from "./app.js";
 import { repositoryAccess } from "./access.js";
 const user = { id: "owner" };
-const auth = { user: vi.fn().mockResolvedValue(user) };
-const github = { resolveCommit: vi.fn().mockResolvedValue("a".repeat(40)), listBranches: vi.fn(), discoverDockerfiles: vi.fn() };
+const auth = { user: vi.fn().mockResolvedValue(user), githubId:vi.fn().mockResolvedValue("99") };
+const github = { resolveCommit: vi.fn().mockResolvedValue("a".repeat(40)), listBranches: vi.fn(), discoverDockerfiles: vi.fn(), assertInstallationOwner:vi.fn(), listRepositories:vi.fn() };
 const controller = new AppController(auth as never, github as never, {} as never, {} as never);
 const request = { headers: {} } as Request;
 const discoveryRequest = (query: Record<string, unknown>) => ({ headers: {}, query }) as unknown as Request;
@@ -23,6 +25,35 @@ const profile = { strategy: "DOCKERFILE", timeoutSeconds: 900, port: 3000, healt
 const repository = () => ({ id: "repo", defaultBranch: "main", installation: { installationId: "123" }, fullName: "owner/repo", configs: [{ id: "config", branchRule: "main", profile }], environments: [{ id: "env" }], workers: [{ id: "worker", revokedAt: null }] });
 beforeEach(() => { vi.clearAllMocks(); db.$transaction.mockImplementation(fn=>fn(db)); db.repository.findFirst.mockResolvedValue(repository()); db.deployment.create.mockResolvedValue({ id: "deployment", status: "QUEUED", commitSha: "a".repeat(40) }); });
 describe("repository and execution authorization", () => {
+  it("loads accessible repositories without importing and marks existing repositories", async()=>{
+    github.assertInstallationOwner.mockResolvedValue({organization:false,accountLogin:"owner"});
+    github.listRepositories.mockResolvedValue([{id:2,full_name:"owner/b",default_branch:"main"},{id:1,full_name:"owner/a",default_branch:"main"}]);
+    db.gitHubInstallation.findUnique.mockResolvedValue(null);
+    db.repository.findMany.mockResolvedValue([{githubRepoId:"1",archivedAt:null}]);
+    expect(await controller.availableRepositories(discoveryRequest({}),"123")).toEqual({repositories:[{id:"1",fullName:"owner/a",defaultBranch:"main",imported:true},{id:"2",fullName:"owner/b",defaultBranch:"main",imported:false}]});
+    expect(db.gitHubInstallation.upsert).not.toHaveBeenCalled(); expect(db.repository.upsert).not.toHaveBeenCalled();
+  });
+  it("imports only selected IDs while retaining other accessible repositories",async()=>{
+    github.assertInstallationOwner.mockResolvedValue({organization:false,accountLogin:"owner"});
+    github.listRepositories.mockResolvedValue([{id:1,full_name:"owner/a",default_branch:"main"},{id:2,full_name:"owner/b",default_branch:"main"}]);
+    db.gitHubInstallation.findUnique.mockResolvedValue(null); db.gitHubInstallation.upsert.mockResolvedValue({id:"installation"}); db.repository.findUnique.mockResolvedValue(null); db.repository.findMany.mockResolvedValue([]);
+    await controller.importRepositories(discoveryRequest({}),"123",{repositoryIds:["2"]});
+    expect(db.repository.upsert).toHaveBeenCalledTimes(1);
+    expect(db.repository.upsert).toHaveBeenCalledWith(expect.objectContaining({where:{githubRepoId:"2"}}));
+    expect(db.repository.updateMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({githubRepoId:{notIn:["1","2"]}})}));
+  });
+  it("rejects tampered selection before any import writes",async()=>{
+    github.assertInstallationOwner.mockResolvedValue({organization:false,accountLogin:"owner"}); github.listRepositories.mockResolvedValue([{id:1,full_name:"owner/a",default_branch:"main"}]); db.gitHubInstallation.findUnique.mockResolvedValue(null);
+    await expect(controller.importRepositories(discoveryRequest({}),"123",{repositoryIds:["999"]})).rejects.toThrow("no longer accessible");
+    expect(db.gitHubInstallation.upsert).not.toHaveBeenCalled(); expect(db.repository.upsert).not.toHaveBeenCalled();
+  });
+  it.each([{}, {repositoryIds:[]}, {repositoryIds:["../1"]}])("rejects invalid or empty selection %j",async body=>{
+    await expect(controller.importRepositories(discoveryRequest({}),"123",body)).rejects.toThrow("Select at least one"); expect(github.listRepositories).not.toHaveBeenCalled();
+  });
+  it("denies repository discovery for an installation assigned to another tenant",async()=>{
+    github.assertInstallationOwner.mockResolvedValue({organization:false,accountLogin:"owner"}); db.gitHubInstallation.findUnique.mockResolvedValue({userId:"foreign",teamId:null});
+    await expect(controller.availableRepositories(discoveryRequest({}),"123")).rejects.toThrow("another account or team"); expect(github.listRepositories).not.toHaveBeenCalled();
+  });
   it("returns a clear expiry response instead of recreating an expired archive",async()=>{
     db.deployment.findFirst.mockResolvedValue({id:"deployment",status:"SUCCEEDED"});
     db.deploymentEffect.findFirst.mockResolvedValue({id:"expired"});
