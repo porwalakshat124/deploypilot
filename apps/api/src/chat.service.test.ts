@@ -16,7 +16,7 @@ describe("free AI chat",()=>{
   it("blocks disabled chat without using any provider",async()=>{vi.stubEnv("AI_CHAT_ENABLED","false");await expect(assistant.chat("user",[{role:"user",content:"help"}])).rejects.toThrow("not configured");expect(provider).not.toHaveBeenCalled();});
   it("enforces durable per-user and shared daily limits before calling Groq",async()=>{
     consume.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    await expect(assistant.chat("user",[{role:"user",content:"help"}])).rejects.toThrow("Free AI chat limit");
+    await expect(assistant.chat("user",[{role:"user",content:"help"}])).rejects.toThrow("Free AI limit");
     expect(consume).toHaveBeenCalledWith("ai-chat-user-day","user",20,"day");expect(provider).not.toHaveBeenCalled();
   });
   it("calls only Groq, bounds output, and returns escaped plain text without actions",async()=>{

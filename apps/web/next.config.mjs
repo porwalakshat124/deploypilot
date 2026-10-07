@@ -13,7 +13,7 @@ const nextConfig = {
       { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" },
       { key: "Referrer-Policy", value: "no-referrer" },
       { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-    ] }];
+    ] }, ...["/dashboard/:path*", "/login/:path*", "/auth/:path*", ...(process.env.VERCEL_ENV === "preview" ? ["/:path*"] : [])].map(source => ({ source, headers: [{ key: "X-Robots-Tag", value: "noindex, nofollow" }] }))];
   },
   outputFileTracingRoot: fileURLToPath(new URL("../../", import.meta.url)),
   env: {

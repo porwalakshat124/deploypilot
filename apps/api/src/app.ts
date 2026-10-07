@@ -26,7 +26,7 @@ import { GitHubService } from "./github.service.js";
 import { PrismaService } from "./prisma.service.js";
 import { createWorkerToken, hashWorkerToken, workerTokenMatches, workerIsActive } from "./worker-auth.js";
 import { branchFromRef, verifyGitHubSignature, type PushPayload } from "./github-webhook.js";
-import { DiagnosisService } from "./diagnosis.service.js";
+import { DiagnosisService, diagnosisEnabled } from "./diagnosis.service.js";
 import { ChatService } from "./chat.service.js";
 import { ChatController } from "./chat.controller.js";
 import { validateProfile } from "./build-profile.js";
@@ -59,7 +59,7 @@ export class AppController {
       { name: "Cloudflare R2", configured: r2.configured(), description: "Archived logs and signed downloads" },
       { name: "Resend", configured: Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM_EMAIL), description: "Deployment result notifications" },
       { name: "Groq AI chat", configured: process.env.AI_CHAT_ENABLED === "true" && Boolean(process.env.GROQ_API_KEY), description: "Free-tier support chat with per-user and shared limits" },
-      { name: "OpenAI", configured: process.env.AI_DIAGNOSIS_ENABLED !== "false" && Boolean(process.env.OPENAI_API_KEY), description: process.env.AI_DIAGNOSIS_ENABLED === "false" ? "AI diagnosis is disabled for this workspace" : "Evidence-based failure diagnosis" }
+      { name: "Groq diagnosis", configured: diagnosisEnabled(), description: "Redacted failure evidence with shared free-tier AI limits" }
     ], failedDeliveries, workerProtocol: "HTTPS polling", providerDelivery: "Configuration status does not prove successful delivery" };
   }
 
@@ -238,7 +238,7 @@ export class AppController {
     if (!result) throw new NotFoundException("Deployment not found");
     const canApprove = result.approvalStatus === "PENDING" && result.requestedById !== user.id && Boolean(await db.repository.findFirst({ where: { id: result.repositoryId, ...repositoryAccess(user.id, "admin") }, select: { id: true } }));
     const { secretSnapshot: _sealed, ...safeResult } = result;
-    return { ...safeResult, canApprove, diagnosisEnabled: process.env.AI_DIAGNOSIS_ENABLED !== "false" && Boolean(process.env.OPENAI_API_KEY) };
+    return { ...safeResult, canApprove, diagnosisEnabled: diagnosisEnabled() };
   }
 
   @Get("/v1/deployments/:deploymentId/artifacts")
@@ -338,7 +338,7 @@ export class AppController {
     const user = await this.auth.user(request);
     const deployment = await db.deployment.findFirst({ where: { id: deploymentId, repository: repositoryAccess(user.id, "deploy"), status: DeploymentStatus.FAILED }, select: { id: true } });
     if (!deployment) throw new NotFoundException("Failed deployment not found");
-    return this.diagnosis.diagnose(deploymentId);
+    return this.diagnosis.diagnose(deploymentId, user.id);
   }
 
   @Sse("/v1/deployments/:deploymentId/events")
