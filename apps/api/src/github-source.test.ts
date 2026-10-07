@@ -12,6 +12,16 @@ afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 function json(value: unknown, headers?: Record<string, string>) { return new Response(JSON.stringify(value), { headers }); }
 function commit() { fetchMock.mockResolvedValueOnce(json({ sha: "a".repeat(40), commit: { tree: { sha: "b".repeat(40) } } })); }
 describe("GitHub source discovery", () => {
+  it("loads every page of installation repositories",async()=>{
+    const firstPage = Array.from({length:100},(_,i)=>({id:i+1,full_name:"owner/repo-"+(i+1),default_branch:"main"}));
+    fetchMock.mockResolvedValueOnce(json({repositories:firstPage},{link:'<https://api.github.com/installation/repositories?per_page=100&page=2>; rel="next"'})).mockResolvedValueOnce(json({repositories:[{id:101,full_name:"owner/last",default_branch:"main"}]}));
+    expect(await github.listRepositories("42")).toHaveLength(101);
+    expect(fetchMock.mock.calls[1][0]).toContain("page=2");
+  });
+  it("does not return a partial repository list when a later page fails",async()=>{
+    fetchMock.mockResolvedValueOnce(json({repositories:[{id:1,full_name:"owner/first",default_branch:"main"}]},{link:'<https://api.github.com/installation/repositories?page=2>; rel="next"'})).mockResolvedValueOnce(new Response("private error",{status:429}));
+    await expect(github.listRepositories("42")).rejects.toThrow("rate limited");
+  });
   it("uses authenticated discovery and returns only the verified account installation", async () => {
     fetchMock.mockResolvedValueOnce(json({slug:"deploypilot-ap"})).mockResolvedValueOnce(json([{id:7,account:{id:101,type:"User",login:"other"}},{id:42,account:{id:99,type:"User",login:"renamed-user"},suspended_at:null}]));
     expect(await github.personalInstallation("99")).toEqual({installationId:"42",accountLogin:"renamed-user",installUrl:"https://github.com/apps/deploypilot-ap/installations/new"});

@@ -107,9 +107,11 @@ export class GitHubService {
     for (let page = 1; page <= 100; page++) {
     const response = await fetch("https://api.github.com/installation/repositories?per_page=100&page=" + page, {
       headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}`, "X-GitHub-Api-Version": "2022-11-28" },
+      signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok) throw new InternalServerErrorException("Unable to read GitHub repositories");
+    if (!response.ok) throw new ServiceUnavailableException(response.status === 403 || response.status === 429 ? "GitHub repository discovery is rate limited; try again later" : "Unable to read GitHub repositories; check App access and reload");
     const body = await response.json() as { repositories: GitHubRepository[] };
+    if (!Array.isArray(body.repositories)) throw new ServiceUnavailableException("GitHub repository discovery returned an invalid list; reload to try again");
     repositories.push(...body.repositories);
     if (!/rel="next"/.test(response.headers.get("link") ?? "")) return repositories;
     }
