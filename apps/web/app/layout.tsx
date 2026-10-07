@@ -5,6 +5,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
+  verification: { google: "6FNBPxO2gyceVu54JNnvRsSzxw2bo23UQUdUp-swDuY" },
   title: { default: "DeployPilot | GitHub & Docker Deployment Dashboard", template: "%s | DeployPilot" },
   description: "Import GitHub repositories and deploy with your team's Docker workers. DeployPilot public beta.",
 };
