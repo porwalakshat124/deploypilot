@@ -15,6 +15,8 @@ try {
   $entry=Join-Path $candidate 'apps/worker/dist/main.js'
   if(!(Select-String -LiteralPath $entry -SimpleMatch '--check' -Quiet)){throw "Candidate lacks read-only preflight; previous worker remains running"}
   $probe=Start-Process -FilePath (Get-Command node).Source -ArgumentList ('"'+$entry+'" --check') -WorkingDirectory $candidate -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $candidate 'preflight.log') -RedirectStandardError (Join-Path $candidate 'preflight-error.log')
+  # Retain the process handle before it exits so Windows PowerShell can read ExitCode.
+  $null=$probe.Handle
   if(!$probe.WaitForExit(45000)){Stop-Process -Id $probe.Id;throw "Candidate preflight timed out; previous worker remains running"}
   $probe.Refresh()
   if($probe.ExitCode -ne 0){throw "Candidate preflight failed; previous worker remains running"}

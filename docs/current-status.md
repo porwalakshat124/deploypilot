@@ -32,14 +32,22 @@ attempt was rejected and the organization repository remained absent from its
 DeployPilot account. Owner/member/pending-owner rules have regression coverage.
 Enterprise SSO testing remains deferred on the free budget.
 
-B. A functional hosted Supabase recovery on a second trusted project/host,
-Storage binary-object recovery before storing files, and broader user/build
-load/soak/capacity tests. Six real local Docker builds in two lanes, 360 health
-requests, twelve restarts and six stop/start checks passed. The latest 300 worker
-API reads passed with zero errors (p95 3.21 seconds). These bounded checks do not
-certify service capacity. Recovery still needs a valid privately configured
-RECOVERY_POSTGRES_URL for the existing recovery project; its HTTPS API URL is not
-a PostgreSQL connection string.
+B. Hosted database and fresh GitHub login recovery passed for both primary and
+pkmania124 accounts. Original account IDs were preserved; repository membership
+scope and foreign-repository denial passed, including 120 authenticated recovery
+reads at concurrency five. Recovery Email login is disabled. Storage binary-object
+recovery is required before storing files; production capacity validation is required
+before scaling beyond the current tested setup.
+An extended local Docker soak passed in 12.3 minutes: twelve builds in two lanes,
+720 health requests, twenty-four restarts and twelve stop/start checks. A fifteen-minute
+authenticated worker API soak completed 300 reads at concurrency five with zero errors
+(p50 3.12 seconds, p95 5.88 seconds). These bounded checks do not
+certify service capacity. Hosted database recovery into deploypilot-recovery-test
+passed on October 2: 22 public tables, 2 users, 3 teams, 47 deployments, 2 Auth users
+and identities, and 2 decryptable environment secrets. Managed Auth DDL was retained,
+old sessions excluded, RLS enabled, and Auth health returned 200. The GitHub provider
+is now configured on that recovery project and fresh login/tenant checks passed.
+Production was not switched or modified.
 
 C. Independent security review and any resulting fixes. Internal checks and the
 review packet are complete, but they are not independent review.
