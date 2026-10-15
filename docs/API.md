@@ -9,6 +9,7 @@ on each operation; a previous token does not preserve removed team access.
 | Area | Routes | Access |
 | --- | --- | --- |
 | Health | GET /health, /health/ready | Public; ready includes dependency readiness |
+| Account/email preferences | GET/PATCH /v1/me | Signed-in user only; PATCH accepts displayName and/or emailNotifications: ALL, FAILURES or OFF. OFF stops deployment emails and account-matched operational alerts; no display name is required to unsubscribe. |
 | GitHub discovery | GET /v1/github/installation; GET /v1/github/installations/:id/available-repositories | Verified user/owner and installation; lists permitted repositories without importing |
 | GitHub import | POST /v1/github/installations/:id/repositories with repositoryIds; legacy GET /v1/github/installations/:id/repositories synchronizes all permitted repositories | Verified owner and installation/team binding; legacy GET performs synchronization |
 | Repositories | GET /v1/repositories; GET /v1/repositories/:id/setup, /branches, /dockerfiles | Member read; setup includes canDeploy |
