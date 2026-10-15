@@ -25,6 +25,8 @@ export class NotificationsService {
       `Commit: ${deployment.commitSha.slice(0, 12)}`,
       `Environment: ${deployment.environment?.name ?? "—"}`,
       `Deployment ID: ${deployment.id}`,
+      "",
+      "Manage or unsubscribe from DeployPilot emails: https://deploypilot-web.vercel.app/dashboard/settings",
     ].join("\n");
 
     const response = await fetch("https://api.resend.com/emails", {

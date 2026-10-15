@@ -48,9 +48,10 @@ export class TeamsController {
   @Patch("/v1/me")
   async updateMe(@Req() request: Request, @Body() body: { displayName?: unknown; emailNotifications?: unknown }) {
     const user = await this.auth.user(request);
-    if (typeof body.displayName !== "string" || !body.displayName.trim() || body.displayName.length > 80) throw new BadRequestException("Display name must be 1–80 characters");
-    if (body.emailNotifications !== undefined && !["ALL", "FAILURES", "OFF"].includes(String(body.emailNotifications))) throw new BadRequestException("Invalid notification preference");
-    return db.user.update({ where: { id: user.id }, data: { displayName: body.displayName.trim(), ...(body.emailNotifications !== undefined ? { emailNotifications: String(body.emailNotifications) } : {}) }, select: { id: true, email: true, displayName: true, emailNotifications: true } });
+    if (body.displayName !== undefined && (typeof body.displayName !== "string" || !body.displayName.trim() || body.displayName.length > 80)) throw new BadRequestException("Display name must be 1–80 characters");
+    if (body.emailNotifications !== undefined && (typeof body.emailNotifications !== "string" || !["ALL", "FAILURES", "OFF"].includes(body.emailNotifications))) throw new BadRequestException("Invalid notification preference");
+    if (body.displayName === undefined && body.emailNotifications === undefined) throw new BadRequestException("Choose an account setting to update");
+    return db.user.update({ where: { id: user.id }, data: { ...(typeof body.displayName === "string" ? { displayName: body.displayName.trim() } : {}), ...(typeof body.emailNotifications === "string" ? { emailNotifications: body.emailNotifications } : {}) }, select: { id: true, email: true, displayName: true, emailNotifications: true } });
   }
 
   @Get("/v1/teams")

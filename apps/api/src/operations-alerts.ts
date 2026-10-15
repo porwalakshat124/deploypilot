@@ -24,10 +24,12 @@ export class OperationsAlerts implements OnModuleInit, OnModuleDestroy {
     if (!key) return { sent: false };
     if (Date.now() - (this.sent.get(key) ?? 0) < 3600000) return { sent: false, deduplicated: true };
     if (!process.env.OPERATIONS_ALERT_EMAIL || !process.env.RESEND_API_KEY || !process.env.RESEND_FROM_EMAIL) return { sent: false, configured: false };
+    const recipient = await db.user.findFirst({ where: { email: { equals: process.env.OPERATIONS_ALERT_EMAIL.trim(), mode: "insensitive" } }, select: { emailNotifications: true } });
+    if (recipient?.emailNotifications === "OFF") return { sent: false, reason: "Disabled by recipient preferences" };
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST", signal: AbortSignal.timeout(15000),
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json", "Idempotency-Key": `operations/${createHash("sha256").update(key).digest("hex")}/${Math.floor(Date.now() / 3600000)}` },
-      body: JSON.stringify({ from: process.env.RESEND_FROM_EMAIL, to: [process.env.OPERATIONS_ALERT_EMAIL], subject: "DeployPilot operations need attention", text: `Operational signals: ${key}.\nCheck the DeployPilot dashboard and production runbook.\nNo credentials or deployment logs are included.` }),
+      body: JSON.stringify({ from: process.env.RESEND_FROM_EMAIL, to: [process.env.OPERATIONS_ALERT_EMAIL], subject: "DeployPilot operations need attention", text: `Operational signals: ${key}.\nCheck the DeployPilot dashboard and production runbook.\nNo credentials or deployment logs are included.\n\nStop DeployPilot emails in Settings: https://deploypilot-web.vercel.app/dashboard/settings` }),
     });
     if (!response.ok) throw new Error(`Operational email failed: HTTP ${response.status}`);
     this.sent.set(key, Date.now());
